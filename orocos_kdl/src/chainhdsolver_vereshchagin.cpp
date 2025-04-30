@@ -164,6 +164,7 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
                     s.E_tilde(r, c) = alfa(r + 3, c);
                     s.E_tilde(r + 3, c) = alfa(r, c);
                 }
+            E_input = s.E_tilde;
             //Change the reference frame of alfa to the segmentN tip frame
             //F_Total holds end effector frame, if done per segment bases then constraints could be extended to all segments
             Rotation base_to_end = F_total.M.Inverse();
@@ -276,7 +277,7 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     svd_eigen_HH(results[0].M, Um, Sm, Vm, tmpm);
     //truncated svd, what would sdls, dls physically mean?
     for (unsigned int i = 0; i < nc; i++)
-        if (Sm(i) < 1e-14)
+        if (Sm(i) < 1e-8)
             Sm(i) = 0.0;
         else
             Sm(i) = 1 / Sm(i);
@@ -288,6 +289,7 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     Vector6d acc;
     acc << Eigen::Vector3d::Map(acc_root.rot.data), Eigen::Vector3d::Map(acc_root.vel.data);
     nu_sum.noalias() = -(results[0].E_tilde.transpose() * acc);
+    nu_sum += E_input.transpose() * acc;
     //nu_sum.setZero();
     nu_sum += beta.data;
     nu_sum -= results[0].G;

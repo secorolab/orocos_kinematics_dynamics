@@ -481,6 +481,7 @@ private:
     Eigen::VectorXd total_torques; // all the contributions that are felt at the joint: constraints + nature + external forces
     Wrench qdotdot_sum;
     Frame F_total;
+    Matrix6Xd E_input; // 
 
     struct segment_info
     {
