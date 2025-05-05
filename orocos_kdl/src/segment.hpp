@@ -120,6 +120,15 @@ namespace KDL {
             return joint;
         }
         /**
+         * Get mutable joint of the segment
+         * 
+         * @return reference to the joint of the segment
+         */
+        Joint& getMutableJoint()
+        {
+            return joint;
+        }
+        /**
          * Request the inertia of the segment
          *
          *
