@@ -22,7 +22,7 @@ endif()
 # so set this to FIRST.
 set(Python3_FIND_UNVERSIONED_NAMES FIRST)
 
-project(python_orocos_kdl VERSION 1.5.2)
+project(python_orocos_kdl VERSION 1.5.4)
 
 # find a matching version of orocos_kdl
 find_package(orocos_kdl ${PROJECT_VERSION} EXACT REQUIRED)
@@ -49,7 +49,7 @@ if(catkin_FOUND)
 endif()
 
 # Build the module
-find_package(pybind11 2.6 QUIET)
+find_package(pybind11 2.13 QUIET)
 if(NOT ${pybind11_FOUND})
   message(STATUS "pybind11 not found, building from source")
   add_subdirectory(pybind11)
