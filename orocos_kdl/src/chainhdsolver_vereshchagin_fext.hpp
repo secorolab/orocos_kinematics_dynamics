@@ -24,9 +24,9 @@
 #ifndef KDL_CHAINHDSOLVER_VERESHCHAGIN_FEXT_HPP
 #define KDL_CHAINHDSOLVER_VERESHCHAGIN_FEXT_HPP
 
-#include "kdl/chainidsolver.hpp"
-#include "kdl/frames.hpp"
-#include "kdl/articulatedbodyinertia.hpp"
+#include "chainidsolver.hpp"
+#include "frames.hpp"
+#include "articulatedbodyinertia.hpp"
 
 #include<Eigen/StdVector>
 

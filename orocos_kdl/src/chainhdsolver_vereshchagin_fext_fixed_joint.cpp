@@ -22,8 +22,8 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "chainhdsolver_vereshchagin_fext_fixed_joint.hpp"
-#include "kdl/frames_io.hpp"
-#include "kdl/utilities/svd_eigen_HH.hpp"
+#include "frames_io.hpp"
+#include "utilities/svd_eigen_HH.hpp"
 
 namespace KDL
 {
