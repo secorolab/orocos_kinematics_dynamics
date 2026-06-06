@@ -43,6 +43,7 @@
 #include <kdl/chainjnttojacsolver.hpp>
 #include <kdl/chainjnttojacdotsolver.hpp>
 #include <kdl/chainidsolver_recursive_newton_euler.hpp>
+#include "chainhdsolver_vereshchagin_fixed_joint.hpp"
 #include <kdl/kinfam_io.hpp>
 #include "PyKDL.h"
 
@@ -533,4 +534,38 @@ void init_kinfam(pybind11::module &m)
     // ------------------------------
     py::class_<ChainIdSolver_RNE, ChainIdSolver> chain_id_solver_RNE(m, "ChainIdSolver_RNE");
     chain_id_solver_RNE.def(py::init<const Chain&, Vector>(), py::arg("chain"), py::arg("grav"));
+
+    // ------------------------------
+    // ChainHdSolver_Vereshchagin_Fixed_Joint
+    // ------------------------------
+    py::class_<ChainHdSolver_Vereshchagin_Fixed_Joint>
+      chain_hd_solver_vereshchagin_fixed_joint(m, "ChainHdSolver_Vereshchagin_Fixed_Joint");
+    chain_hd_solver_vereshchagin_fixed_joint.def(
+      py::init<const Chain&, const Twist&, const unsigned int>(),
+      py::arg("chain"),
+      py::arg("root_acc"),
+      py::arg("nc"));
+    chain_hd_solver_vereshchagin_fixed_joint.def(
+      "CartToJnt",
+      &ChainHdSolver_Vereshchagin_Fixed_Joint::CartToJnt,
+      py::arg("q"),
+      py::arg("q_dot"),
+      py::arg("q_dotdot"),
+      py::arg("alpha"),
+      py::arg("beta"),
+      py::arg("f_ext"),
+      py::arg("ff_torques"),
+      py::arg("constraint_torques"));
+    chain_hd_solver_vereshchagin_fixed_joint.def(
+      "getTransformedLinkAcceleration",
+      &ChainHdSolver_Vereshchagin_Fixed_Joint::getTransformedLinkAcceleration,
+      py::arg("x_dotdot"));
+    chain_hd_solver_vereshchagin_fixed_joint.def(
+      "getTotalTorque",
+      &ChainHdSolver_Vereshchagin_Fixed_Joint::getTotalTorque,
+      py::arg("total_tau"));
+    chain_hd_solver_vereshchagin_fixed_joint.def(
+      "getContraintForceMagnitude",
+      &ChainHdSolver_Vereshchagin_Fixed_Joint::getContraintForceMagnitude,
+      py::arg("nu"));
 }

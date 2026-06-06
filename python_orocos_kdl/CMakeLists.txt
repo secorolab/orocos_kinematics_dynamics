@@ -64,6 +64,8 @@ pybind11_add_module(${LIBRARY_NAME}
   PyKDL/frames.cpp
   PyKDL/kinfam.cpp
   PyKDL/framevel.cpp
-  PyKDL/dynamics.cpp)
+  PyKDL/dynamics.cpp
+  ../orocos_kdl/src/chainhdsolver_vereshchagin_fixed_joint.cpp)
+target_include_directories(${LIBRARY_NAME} PRIVATE ../orocos_kdl/src)
 target_link_libraries(${LIBRARY_NAME} PRIVATE ${orocos_kdl_LIBRARIES})
 install(TARGETS ${LIBRARY_NAME} DESTINATION "${PYTHON_SITE_PACKAGES_INSTALL_DIR}")

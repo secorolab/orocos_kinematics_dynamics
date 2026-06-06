@@ -155,6 +155,32 @@ class KinfamTestFunctions(unittest.TestCase):
         with self.assertRaises(IndexError):
             ja[3] = 1
 
+    def testChainHdSolverVereshchaginFixedJoint(self):
+        n = self.chain.getNrOfJoints()
+        ns = self.chain.getNrOfSegments()
+        solver = ChainHdSolver_Vereshchagin_Fixed_Joint(
+            self.chain,
+            Twist(Vector(0.0, 0.0, 9.81), Vector.Zero()),
+            5,
+        )
+        q = JntArray(n)
+        qdot = JntArray(n)
+        qddot = JntArray(n)
+        alpha = Jacobian(5)
+        alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector.Zero()))
+        alpha.setColumn(1, Twist(Vector(0.0, 1.0, 0.0), Vector.Zero()))
+        alpha.setColumn(2, Twist(Vector.Zero(), Vector(1.0, 0.0, 0.0)))
+        alpha.setColumn(3, Twist(Vector.Zero(), Vector(0.0, 1.0, 0.0)))
+        alpha.setColumn(4, Twist(Vector.Zero(), Vector(0.0, 0.0, 1.0)))
+        beta = JntArray(5)
+        ff_torques = JntArray(n)
+        constraint_torques = JntArray(n)
+        f_ext = [Wrench.Zero() for _ in range(ns)]
+        self.assertEqual(
+            solver.CartToJnt(q, qdot, qddot, alpha, beta, f_ext, ff_torques, constraint_torques),
+            0,
+        )
+
     def testFkPosAndJac(self):
         deltaq = 1E-4
         epsJ = 1E-4
@@ -386,6 +412,7 @@ def suite():
     suite.addTest(KinfamTestFunctions('testRotationalInertia'))
     suite.addTest(KinfamTestFunctions('testJacobian'))
     suite.addTest(KinfamTestFunctions('testJntArray'))
+    suite.addTest(KinfamTestFunctions('testChainHdSolverVereshchaginFixedJoint'))
     suite.addTest(KinfamTestFunctions('testFkPosAndJac'))
     suite.addTest(KinfamTestFunctions('testFkVelAndJac'))
     suite.addTest(KinfamTestFunctions('testFkVelAndIkVel'))
