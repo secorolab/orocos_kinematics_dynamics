@@ -44,6 +44,10 @@ ChainHdSolver_Vereshchagin::ChainHdSolver_Vereshchagin(const Chain& chain_, cons
 
     // Provide the necessary memory for storing the total torque acting on each joint
     total_torques = Eigen::VectorXd::Zero(nj);
+
+    // Default driver weights: fully compensate both drivers, i.e. today's behaviour.
+    w_f_ext = Eigen::VectorXd::Ones(nc);
+    w_ff_torques = Eigen::VectorXd::Ones(nc);
 }
 
 void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
@@ -51,6 +55,17 @@ void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
     nj = chain.getNrOfJoints();
     total_torques = Eigen::VectorXd::Zero(nj);
     results.resize(ns+1,segment_info(nc));
+    w_f_ext = Eigen::VectorXd::Ones(nc);
+    w_ff_torques = Eigen::VectorXd::Ones(nc);
+}
+
+int ChainHdSolver_Vereshchagin::setDriverWeights(const Eigen::VectorXd& w_f_ext_, const Eigen::VectorXd& w_ff_torques_)
+{
+    if ((unsigned int)w_f_ext_.size() != nc || (unsigned int)w_ff_torques_.size() != nc)
+        return (error = E_SIZE_MISMATCH);
+    w_f_ext = w_f_ext_;
+    w_ff_torques = w_ff_torques_;
+    return (error = E_NOERROR);
 }
 
 int ChainHdSolver_Vereshchagin::CartToJnt(const JntArray &q, const JntArray &q_dot, JntArray &q_dotdot, const Jacobian& alfa, const JntArray& beta, const Wrenches& f_ext, const JntArray &ff_torques, JntArray &constraint_torques)
@@ -89,20 +104,38 @@ void ChainHdSolver_Vereshchagin::initial_upwards_sweep(const JntArray &q, const 
         //Calculate segment properties: X,S,vj,cj
         const Segment& segment = chain.getSegment(i);
         segment_info& s = results[i + 1];
-        //The pose between the joint root and the segment tip (tip expressed in joint root coordinates)
-        s.F = segment.pose(q(j)); //X pose of each link in link coord system
+        const bool segment_is_fixed = (segment.getJoint().getType() == Joint::Fixed);
 
-        F_total = F_total * s.F; //X pose of the each link in root coord system
-        s.F_base = F_total; //X pose of the each link in root coord system for getter functions
+        Twist vj;
+        if (!segment_is_fixed)
+        {
+            //The pose between the joint root and the segment tip (tip expressed in joint root coordinates)
+            s.F = segment.pose(q(j)); //X pose of each link in link coord system
 
-        //The velocity due to the joint motion of the segment expressed in the segments reference frame (tip)
-        Twist vj = s.F.M.Inverse(segment.twist(q(j), qdot(j))); //XDot of each link
-        //Twist aj = s.F.M.Inverse(segment.twist(q(j), qdotdot(j))); //XDotDot of each link
+            F_total = F_total * s.F; //X pose of the each link in root coord system
+            s.F_base = F_total; //X pose of the each link in root coord system for getter functions
 
-        //The unit velocity due to the joint motion of the segment expressed in the segments reference frame (tip)
-        s.Z = s.F.M.Inverse(segment.twist(q(j), 1.0));
-        //Put Z in the joint root reference frame:
-        s.Z = s.F * s.Z;
+            //The velocity due to the joint motion of the segment expressed in the segments reference frame (tip)
+            vj = s.F.M.Inverse(segment.twist(q(j), qdot(j))); //XDot of each link
+            //Twist aj = s.F.M.Inverse(segment.twist(q(j), qdotdot(j))); //XDotDot of each link
+
+            //The unit velocity due to the joint motion of the segment expressed in the segments reference frame (tip)
+            s.Z = s.F.M.Inverse(segment.twist(q(j), 1.0));
+            //Put Z in the joint root reference frame:
+            s.Z = s.F * s.Z;
+            j++;
+        }
+        else
+        {
+            //A fixed joint contributes no DOF: no q(j) to read (avoids an out-of-bounds
+            //read when j has already reached nj), no joint velocity, no joint unit twist.
+            s.F = segment.pose(0.0); //KDL ignores the argument for a fixed joint
+            F_total = F_total * s.F;
+            s.F_base = F_total;
+
+            vj = Twist::Zero();
+            s.Z = Twist::Zero();
+        }
 
         //The total velocity of the segment expressed in the segments reference frame (tip)
         if (i != 0)
@@ -129,8 +162,8 @@ void ChainHdSolver_Vereshchagin::initial_upwards_sweep(const JntArray &q, const 
         //external forces are taken into account through s.U.
         Wrench FextLocal = F_total.M.Inverse() * f_ext[i];
         s.U = s.v * (s.H * s.v) - FextLocal; //f_ext[i];
-        if (segment.getJoint().getType() != Joint::Fixed)
-            j++;
+        s.U_fext = -FextLocal;      // external-wrench channel
+        s.U_ff = Wrench::Zero();    // feed-forward channel is seeded at the joint, not the segment
     }
 
 }
@@ -154,8 +187,12 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
         {
             s.P_tilde = s.H;
             s.R_tilde = s.U;
+            s.R_tilde_fext = s.U_fext;
+            s.R_tilde_ff = s.U_ff;
             s.M.setZero();
             s.G.setZero();
+            s.G_fext.setZero();
+            s.G_ff.setZero();
             //changeBase(alfa_N,F_total.M.Inverse(),alfa_N2);
             for (unsigned int r = 0; r < 3; r++)
                 for (unsigned int c = 0; c < nc; c++)
@@ -180,36 +217,79 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
             //For all others:
             //Everything should expressed in the body coordinates of segment i
             segment_info& child = results[i + 1];
-            //Copy PZ into a vector so we can do matrix manipulations, put torques above forces
-            Vector6d vPZ;
-            vPZ << Eigen::Vector3d::Map(child.PZ.torque.data), Eigen::Vector3d::Map(child.PZ.force.data);
-            Matrix6d PZDPZt;
-            PZDPZt.noalias() = vPZ * vPZ.transpose();
-            PZDPZt /= child.D;
+            //child's joint is chain.getSegment(i) (results[i+1] is the tip of segment i)
+            const bool child_is_fixed = (chain.getSegment(i).getJoint().getType() == Joint::Fixed);
+            if (!child_is_fixed)
+            {
+                //Copy PZ into a vector so we can do matrix manipulations, put torques above forces
+                Vector6d vPZ;
+                vPZ << Eigen::Vector3d::Map(child.PZ.torque.data), Eigen::Vector3d::Map(child.PZ.force.data);
+                Matrix6d PZDPZt;
+                PZDPZt.noalias() = vPZ * vPZ.transpose();
+                PZDPZt /= child.D;
 
-            //equation a) (see Vereshchagin89) PZDPZt=[I,H;H',M]
-            //Azamat:articulated body inertia as in Featherstone (7.19)
-            s.P_tilde = s.H + child.P - ArticulatedBodyInertia(PZDPZt.bottomRightCorner<3,3>(), PZDPZt.topRightCorner<3,3>(), PZDPZt.topLeftCorner<3,3>());
-            //equation b) (see Vereshchagin89)
-            //Azamat: bias force as in Featherstone (7.20)
-            s.R_tilde = s.U + child.R + child.PC + (child.PZ / child.D) * child.u;
-            //equation c) (see Vereshchagin89)
-            s.E_tilde = child.E;
+                //equation a) (see Vereshchagin89) PZDPZt=[I,H;H',M]
+                //Azamat:articulated body inertia as in Featherstone (7.19)
+                s.P_tilde = s.H + child.P - ArticulatedBodyInertia(PZDPZt.bottomRightCorner<3,3>(), PZDPZt.topRightCorner<3,3>(), PZDPZt.topLeftCorner<3,3>());
+                //equation b) (see Vereshchagin89)
+                //Azamat: bias force as in Featherstone (7.20)
+                s.R_tilde = s.U + child.R + child.PC + (child.PZ / child.D) * child.u;
+                //equation c) (see Vereshchagin89)
+                s.E_tilde = child.E;
 
-            //Azamat: equation (c) right side term
-            s.E_tilde.noalias() -= (vPZ * child.EZ.transpose()) / child.D;
+                //Azamat: equation (c) right side term
+                s.E_tilde.noalias() -= (vPZ * child.EZ.transpose()) / child.D;
 
-            //equation d) (see Vereshchagin89)
-            s.M = child.M;
-            //Azamat: equation (d) right side term
-            s.M.noalias() -= (child.EZ * child.EZ.transpose()) / child.D;
+                //equation d) (see Vereshchagin89)
+                s.M = child.M;
+                //Azamat: equation (d) right side term
+                s.M.noalias() -= (child.EZ * child.EZ.transpose()) / child.D;
 
-            //equation e) (see Vereshchagin89)
-            s.G = child.G;
-            Twist CiZDu = child.C + (child.Z / child.D) * child.u;
-            Vector6d vCiZDu;
-            vCiZDu << Eigen::Vector3d::Map(CiZDu.rot.data), Eigen::Vector3d::Map(CiZDu.vel.data);
-            s.G.noalias() += child.E.transpose() * vCiZDu;
+                //equation e) (see Vereshchagin89)
+                s.G = child.G;
+                Twist CiZDu = child.C + (child.Z / child.D) * child.u;
+                Vector6d vCiZDu;
+                vCiZDu << Eigen::Vector3d::Map(CiZDu.rot.data), Eigen::Vector3d::Map(CiZDu.vel.data);
+                s.G.noalias() += child.E.transpose() * vCiZDu;
+
+                //per-driver channels, same recursion minus the nature terms (child.C is nature-only)
+                s.R_tilde_fext = s.U_fext + child.R_fext + (child.PZ / child.D) * child.u_fext;
+                s.R_tilde_ff   = s.U_ff   + child.R_ff   + (child.PZ / child.D) * child.u_ff;
+
+                s.G_fext = child.G_fext;
+                Twist ZDu_fext = (child.Z / child.D) * child.u_fext;
+                Vector6d vZDu_fext;
+                vZDu_fext << Eigen::Vector3d::Map(ZDu_fext.rot.data), Eigen::Vector3d::Map(ZDu_fext.vel.data);
+                s.G_fext.noalias() += child.E.transpose() * vZDu_fext;
+
+                s.G_ff = child.G_ff;
+                Twist ZDu_ff = (child.Z / child.D) * child.u_ff;
+                Vector6d vZDu_ff;
+                vZDu_ff << Eigen::Vector3d::Map(ZDu_ff.rot.data), Eigen::Vector3d::Map(ZDu_ff.vel.data);
+                s.G_ff.noalias() += child.E.transpose() * vZDu_ff;
+            }
+            else
+            {
+                //A fixed child has Z=0 and D=0: no joint-space DOF to project onto, so
+                //this is a plain rigid-body merge of the child into the parent, without
+                //any division by child.D.
+                s.P_tilde = s.H + child.P;
+                s.R_tilde = s.U + child.R + child.PC;
+                s.E_tilde = child.E;
+                s.M = child.M;
+
+                s.G = child.G;
+                Vector6d vC;
+                vC << Eigen::Vector3d::Map(child.C.rot.data), Eigen::Vector3d::Map(child.C.vel.data);
+                s.G.noalias() += child.E.transpose() * vC;
+
+                //per-driver channels: no Z/D*u accumulation term, it is the zero limit
+                //(child.Z = child.D = 0 for a fixed joint), mirroring s.G above.
+                s.R_tilde_fext = s.U_fext + child.R_fext;
+                s.R_tilde_ff   = s.U_ff   + child.R_ff;
+                s.G_fext = child.G_fext;
+                s.G_ff = child.G_ff;
+            }
         }
         if (i != 0)
         {
@@ -218,6 +298,8 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
             s.P = s.F * s.P_tilde;
             //equation b)
             s.R = s.F * s.R_tilde;
+            s.R_fext = s.F * s.R_tilde_fext;
+            s.R_ff = s.F * s.R_tilde_ff;
             //equation c), in matrix: torques above forces, so switch and switch back
             for (unsigned int c = 0; c < nc; c++)
             {
@@ -248,7 +330,18 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
 
             //projection of coriolis and centrepital forces into joint subspace (0 0 Z)
             s.totalBias = -dot(s.Z, s.R + s.PC);
-            s.u = ff_torques(j) + s.totalBias;
+            if (chain.getSegment(i - 1).getJoint().getType() != Joint::Fixed)
+            {
+                s.u = ff_torques(j) + s.totalBias;
+                s.u_fext = -dot(s.Z, s.R_fext);
+                s.u_ff = ff_torques(j) - dot(s.Z, s.R_ff);
+            }
+            else
+            {
+                s.u = s.totalBias; //no joint-space DOF, so no feedforward torque to add; Z=0 makes totalBias 0 too
+                s.u_fext = 0.0;
+                s.u_ff = 0.0;
+            }
 
             //Matrix form of Z, put rotations above translations
             Vector6d vZ;
@@ -292,6 +385,12 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     nu_sum += beta.data;
     nu_sum -= results[0].G;
 
+    // Credit each driver's already-generated acceleration energy only in
+    // proportion to its weight. With unit weights both correction terms are
+    // exactly zero and this reduces to nu_sum -= results[0].G.
+    nu_sum += (Eigen::VectorXd::Ones(nc) - w_f_ext).cwiseProduct(results[0].G_fext);
+    nu_sum += (Eigen::VectorXd::Ones(nc) - w_ff_torques).cwiseProduct(results[0].G_ff);
+
     //equation f) nu = M_0_inverse*(beta_N - E0_tilde`*acc0 - G0)
     nu.noalias() = M_0_inverse * nu_sum;
 }
@@ -306,7 +405,6 @@ void ChainHdSolver_Vereshchagin::final_upwards_sweep(JntArray &q_dotdot, JntArra
         //Calculation of joint and segment accelerations
         //equation g) qdotdot[i] = D^-1*(Q - Z'(R + P(C + acc[i-1]) + E*nu))
         // = D^-1(u - Z'(P*acc[i-1] + E*nu)
-        Twist a_g;
         Twist a_p;
         if (i == 1)
         {
@@ -317,34 +415,43 @@ void ChainHdSolver_Vereshchagin::final_upwards_sweep(JntArray &q_dotdot, JntArra
             a_p = results[i - 1].acc;
         }
 
-        //The contribution of the constraint forces at segment i
-        Vector6d tmp = s.E*nu;
-        Wrench constraint_force = Wrench(Vector(tmp(3), tmp(4), tmp(5)),
-                                         Vector(tmp(0), tmp(1), tmp(2)));
-
-        //acceleration components are also computed
-        //Contribution of the acceleration of the parent (i-1)
-        Wrench parent_force = s.P*a_p;
-        double parent_forceProjection = -dot(s.Z, parent_force);
-        double parentAccComp = parent_forceProjection / s.D;
-
-        //The constraint force and acceleration force projected on the joint axes -> axis torque/force
-        constraint_torques(j) = -dot(s.Z, constraint_force);
-        //The result should be the torque originating from the end-effector constraints
-
-        // Total torque on the joint resulting from the parent forces, constraint forces and nullspace forces.
-        total_torques(j) = s.u + parent_forceProjection + constraint_torques(j);
-        // q_dotdot(j) is also equal to: total_torques(j) / s.D
-
-        s.constAccComp = constraint_torques(j) / s.D;
-        s.nullspaceAccComp = s.u / s.D;
-
-        // Total joint space acceleration resulting from accelerations of parent joints, constraint forces and nullspace forces.
-        q_dotdot(j) = (s.nullspaceAccComp + parentAccComp + s.constAccComp);
-        // Returns segment's spatial acceleration in link distal-tip coordinates. For use needs to be transformed
-        s.acc = s.F.Inverse(a_p + s.Z * q_dotdot(j) + s.C);
         if (chain.getSegment(i - 1).getJoint().getType() != Joint::Fixed)
+        {
+            //The contribution of the constraint forces at segment i
+            Vector6d tmp = s.E*nu;
+            Wrench constraint_force = Wrench(Vector(tmp(3), tmp(4), tmp(5)),
+                                             Vector(tmp(0), tmp(1), tmp(2)));
+
+            //acceleration components are also computed
+            //Contribution of the acceleration of the parent (i-1)
+            Wrench parent_force = s.P*a_p;
+            double parent_forceProjection = -dot(s.Z, parent_force);
+            double parentAccComp = parent_forceProjection / s.D;
+
+            //The constraint force and acceleration force projected on the joint axes -> axis torque/force
+            constraint_torques(j) = -dot(s.Z, constraint_force);
+            //The result should be the torque originating from the end-effector constraints
+
+            // Total torque on the joint resulting from the parent forces, constraint forces and nullspace forces.
+            total_torques(j) = s.u + parent_forceProjection + constraint_torques(j);
+            // q_dotdot(j) is also equal to: total_torques(j) / s.D
+
+            s.constAccComp = constraint_torques(j) / s.D;
+            s.nullspaceAccComp = s.u / s.D;
+
+            // Total joint space acceleration resulting from accelerations of parent joints, constraint forces and nullspace forces.
+            q_dotdot(j) = (s.nullspaceAccComp + parentAccComp + s.constAccComp);
+            // Returns segment's spatial acceleration in link distal-tip coordinates. For use needs to be transformed
+            s.acc = s.F.Inverse(a_p + s.Z * q_dotdot(j) + s.C);
             j++;
+        }
+        else
+        {
+            //A fixed joint contributes no joint-space DOF: no torque/acceleration to solve for.
+            s.constAccComp = 0.0;
+            s.nullspaceAccComp = 0.0;
+            s.acc = s.F.Inverse(a_p + s.C);
+        }
     }
 }
 

@@ -212,7 +212,21 @@ namespace KDL
  * in respective directions. Namely, each column of matrix **alpha** has the value of **1** in the respective
  * direction in which constraint force works, thus it follows that the value of acceleration energy setpoint is
  * the same as the value of Cartesian acceleration, in the respective direction.
- * 
+ *
+ * #### A note on gravity: beta is a gravity-offset acceleration
+ *
+ * This solver takes gravity into account by setting the **root_acc** parameter (passed to the constructor)
+ * to the **negative** of the gravitational acceleration [4]. As a consequence, every Cartesian acceleration
+ * the solver reasons about internally -- including the one constrained via **alpha** / **beta**, and the one
+ * returned by **getTransformedLinkAcceleration** -- is a *gravity-offset* acceleration
+ * `X_dotdot' = X_dotdot - a_g`, not the acceleration one would measure in an inertial base frame.
+ *
+ * In practice this means that to constrain the end-effector's **true** base-frame acceleration to some
+ * `X_dotdot_desired`, the caller must supply `beta = alpha^T * (X_dotdot_desired - a_g)`, which with the sign
+ * convention above is `beta = alpha^T * X_dotdot_desired + alpha^T * root_acc`. In particular, to hold the
+ * end-effector **still** under gravity, `beta = alpha^T * root_acc`, **not** `beta = 0`: passing zero commands
+ * free-fall, since it asks for zero gravity-offset acceleration rather than zero true acceleration.
+ *
  * #### External Forces: f_ext
  * 
  * This type of driver can be used for specifying **physical** (but not artificial, i.e. not task-introduced)
@@ -289,7 +303,25 @@ namespace KDL
  *    accelerations of the end-effector. More specifically, additional torque commands will be computed under
  *    **constrained joint torques** (**ctrl_torques** in this implementation), to overcome those "disturbances".
  *
- * Nevertheless, the above-described prioritization can be changed (see [3] & [5] for more details) but those features are not implemented in KDL.
+ * Nevertheless, the above-described prioritization can be changed (see [3] & [5] for more details), via **setDriverWeights**.
+ *
+ * #### Changing the prioritization: setDriverWeights
+ *
+ * The **setDriverWeights** method accepts two **nc x 1** weight vectors, one per constraint direction (the columns
+ * of **alpha**): one for the external wrenches (**f_ext**) and one for the feed-forward joint torques (**ff_torques**).
+ * Per Eq. (3.42) of [3], each weight controls how much of that driver's contribution to the acceleration energy the
+ * constraint is credited for solving:
+ *
+ *  * **w = 1** (the default) -- the constraint fully compensates that driver in that direction, reproducing the
+ *    classic Popov-Vereshchagin prioritization described above.
+ *
+ *  * **w = 0** -- the constraint is blind to that driver in that direction: the driver's effect passes through to
+ *    the end-effector instead of being compensated.
+ *
+ *  * **0 < w < 1** -- partial credit, blending the two behaviors.
+ *
+ * Because the weights are vectors rather than scalars, this can be applied per constraint direction, e.g. compliant
+ * along a contact normal while remaining stiff in the other constrained directions.
  *
  * ### Using the algorithm for solving forward dynamics (FD) problem
  * 
@@ -407,6 +439,23 @@ public:
     /// @copydoc KDL::SolverI::updateInternalDataStructures
     virtual void updateInternalDataStructures();
 
+    /**
+     * Set the per-driver weights used when solving for the constraint force
+     * magnitudes. Each weight is an nc-vector, one entry per column of alpha.
+     *
+     * A weight of 1.0 (the default) means the acceleration constraint fully
+     * compensates that driver, i.e. the constraint is satisfied exactly
+     * regardless of the driver -- this is the classic Popov-Vereshchagin
+     * prioritisation. A weight of 0.0 means the constraint ignores that
+     * driver, letting its effect pass through to the constrained segment.
+     * Values in between blend the two, as in Eq. (3.42) of [3].
+     *
+     * \param w_f_ext weight per constraint direction for the external wrenches
+     * \param w_ff_torques weight per constraint direction for the feed-forward joint torques
+     * \return E_NOERROR on success, E_SIZE_MISMATCH if either vector is not of size nc
+     */
+    int setDriverWeights(const Eigen::VectorXd& w_f_ext, const Eigen::VectorXd& w_ff_torques);
+
     //Returns cartesian acceleration of links in base coordinates
     void getTransformedLinkAcceleration(Twists& x_dotdot);
 
@@ -481,6 +530,7 @@ private:
     Eigen::VectorXd total_torques; // all the contributions that are felt at the joint: constraints + nature + external forces
     Wrench qdotdot_sum;
     Frame F_total;
+    Eigen::VectorXd w_f_ext, w_ff_torques; //per-constraint-direction driver weights, see setDriverWeights
 
     struct segment_info
     {
@@ -511,8 +561,17 @@ private:
         double totalBias; //Azamat: R+PC (centrepital+coriolis) in joint subspace
         double u; //vector u[i] = torques(i) - S[i]^T*(p_A[i] + I_A[i]*C[i]) in joint subspace. Azamat: In code u[i] = torques(i) - s[i].totalBias
 
+        // Per-driver contributions, tracked alongside the totals above so that
+        // constraint_calculation() can credit each driver only partially.
+        // Sum of the channels plus the rigid-body bias terms == the totals.
+        Wrench U_fext, R_fext, R_tilde_fext;
+        Wrench U_ff, R_ff, R_tilde_ff;
+        double u_fext, u_ff;
+        Eigen::VectorXd G_fext, G_ff;
+
         segment_info(unsigned int nc):
-            D(0),nullspaceAccComp(0),constAccComp(0),biasAccComp(0),totalBias(0),u(0)
+            D(0),nullspaceAccComp(0),constAccComp(0),biasAccComp(0),totalBias(0),u(0),
+            u_fext(0),u_ff(0)
         {
             E.resize(6, nc);
             E_tilde.resize(6, nc);
@@ -524,6 +583,10 @@ private:
             M.setZero();
             G.setZero();
             EZ.setZero();
+            G_fext.resize(nc);
+            G_ff.resize(nc);
+            G_fext.setZero();
+            G_ff.setZero();
         };
     };
 

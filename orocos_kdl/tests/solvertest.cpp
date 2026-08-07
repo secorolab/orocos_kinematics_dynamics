@@ -1105,6 +1105,290 @@ void SolverTest::VereshchaginTest()
     }
 }
 
+void SolverTest::VereshchaginGravityOffsetTest()
+{
+    std::cout << "KDL Vereshchagin Gravity Offset Test" << std::endl;
+
+    // Pins the convention documented above ChainHdSolver_Vereshchagin: beta is a
+    // GRAVITY-OFFSET acceleration setpoint, not the true base-frame acceleration.
+    // beta = 0 does NOT hold the end-effector still -- it commands free-fall.
+    double eps = 1.e-9;
+
+    Joint jointY(Joint::RotY);
+    Frame segFrame(Vector(0.0, 0.0, 0.4));
+    RigidBodyInertia segInertia(2.0, Vector(0.0, 0.0, 0.2),
+                                 RotationalInertia(0.02666667, 0.02666667, 1e-4));
+
+    Chain chain;
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+
+    unsigned int nj = chain.getNrOfJoints();
+    JntArray q(nj), qd(nj), qdd(nj), ff(nj), ct(nj);
+    q(0) = 0.3; q(1) = -0.6; q(2) = 0.4;
+    // qd, ff default-initialize to zero.
+
+    Wrenches f_ext_zero(3);
+
+    unsigned int nc = 3;
+    Jacobian alpha(nc);
+    alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector::Zero()));
+    alpha.setColumn(1, Twist(Vector(0.0, 0.0, 1.0), Vector::Zero()));
+    alpha.setColumn(2, Twist(Vector::Zero(), Vector(0.0, 1.0, 0.0)));
+
+    Twist root_acc(Vector(0.0, 0.0, 9.81), Vector::Zero());
+
+    // Case A: beta = 0 does NOT hold the arm still -- it free-falls.
+    ChainHdSolver_Vereshchagin solverA(chain, root_acc, nc);
+    JntArray beta_zero(nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverA.CartToJnt(q, qd, qdd, alpha, beta_zero, f_ext_zero, ff, ct));
+    CPPUNIT_ASSERT(std::abs(qdd(0)) > 1.0);
+
+    // Case B: beta = alpha^T * root_acc DOES hold the arm still.
+    ChainHdSolver_Vereshchagin solverB(chain, root_acc, nc);
+    JntArray beta_shifted(nc);
+    beta_shifted(0) = 0.0;
+    beta_shifted(1) = 9.81;
+    beta_shifted(2) = 0.0;
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverB.CartToJnt(q, qd, qdd, alpha, beta_shifted, f_ext_zero, ff, ct));
+    for (unsigned int i = 0; i < nj; i++)
+        CPPUNIT_ASSERT(Equal(qdd(i), 0.0, eps));
+}
+
+void SolverTest::VereshchaginFixedJointTest()
+{
+    std::cout << "KDL Vereshchagin Hybrid Dynamics Fixed-Joint Test" << std::endl;
+
+    // Two chains that are physically identical: Chain B additionally carries a
+    // zero-length, zero-mass Joint::Fixed segment between its 2nd and 3rd movable
+    // segments. Since it changes nothing physically, both chains must produce
+    // identical joint accelerations and constraint torques.
+    double eps = 1.e-9;
+
+    Joint jointY(Joint::RotY);
+    Frame segFrame(Vector(0.0, 0.0, 0.4));
+    RigidBodyInertia segInertia(2.0, Vector(0.0, 0.0, 0.2),
+                                 RotationalInertia(0.02666667, 0.02666667, 1e-4));
+
+    Chain chainA;
+    chainA.addSegment(Segment(jointY, segFrame, segInertia));
+    chainA.addSegment(Segment(jointY, segFrame, segInertia));
+    chainA.addSegment(Segment(jointY, segFrame, segInertia));
+
+    Chain chainB;
+    chainB.addSegment(Segment(jointY, segFrame, segInertia));
+    chainB.addSegment(Segment(jointY, segFrame, segInertia));
+    chainB.addSegment(Segment(Joint(Joint::Fixed), Frame(Vector(0.0, 0.0, 0.0)), RigidBodyInertia::Zero()));
+    chainB.addSegment(Segment(jointY, segFrame, segInertia));
+
+    unsigned int njA = chainA.getNrOfJoints();
+    unsigned int njB = chainB.getNrOfJoints();
+    CPPUNIT_ASSERT_EQUAL((unsigned int)3, njA);
+    CPPUNIT_ASSERT_EQUAL((unsigned int)3, njB);
+
+    JntArray qA(njA), qdA(njA), qddA(njA), ffA(njA), ctA(njA);
+    JntArray qB(njB), qdB(njB), qddB(njB), ffB(njB), ctB(njB);
+
+    for (unsigned int i = 0; i < 3; i++)
+    {
+        double q_i = 0.2 + 0.1 * i;
+        double qd_i = -0.3 + 0.2 * i;
+        double ff_i = 1.0 - 0.5 * i;
+        qA(i) = qB(i) = q_i;
+        qdA(i) = qdB(i) = qd_i;
+        ffA(i) = ffB(i) = ff_i;
+    }
+
+    Wrench f_tool(Vector(3.0, -2.0, 1.0), Vector(0.5, 0.0, -0.5));
+    Wrenches f_extA(3);
+    f_extA[2] = f_tool;
+    Wrenches f_extB(4);
+    f_extB[3] = f_tool;
+
+    unsigned int nc = 3;
+    Jacobian alpha(nc);
+    alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector::Zero()));
+    alpha.setColumn(1, Twist(Vector(0.0, 0.0, 1.0), Vector::Zero()));
+    alpha.setColumn(2, Twist(Vector::Zero(), Vector(0.0, 1.0, 0.0)));
+
+    JntArray beta(nc);
+    beta(0) = 0.1;
+    beta(1) = -0.1;
+    beta(2) = 0.05;
+
+    Twist root_acc(Vector(0.0, 0.0, 9.81), Vector::Zero());
+
+    ChainHdSolver_Vereshchagin solverA(chainA, root_acc, nc);
+    ChainHdSolver_Vereshchagin solverB(chainB, root_acc, nc);
+
+    int retA = solverA.CartToJnt(qA, qdA, qddA, alpha, beta, f_extA, ffA, ctA);
+    int retB = solverB.CartToJnt(qB, qdB, qddB, alpha, beta, f_extB, ffB, ctB);
+
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, retA);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, retB);
+
+    for (unsigned int i = 0; i < 3; i++)
+    {
+        CPPUNIT_ASSERT(qddB(i) == qddB(i)); // not NaN
+        CPPUNIT_ASSERT(ctB(i) == ctB(i)); // not NaN
+        CPPUNIT_ASSERT(Equal(qddA(i), qddB(i), eps));
+        CPPUNIT_ASSERT(Equal(ctA(i), ctB(i), eps));
+    }
+}
+
+void SolverTest::VereshchaginDriverWeightingTest()
+{
+    std::cout << "KDL Vereshchagin Driver Weighting Test" << std::endl;
+
+    // A 3-link RotY chain with a nonzero external wrench on the tip and nonzero
+    // feed-forward torques. This test only exercises setDriverWeights(), so no
+    // fixed joints are needed here (that guard is covered by VereshchaginFixedJointTest).
+    double eps = 1.e-9;
+
+    Joint jointY(Joint::RotY);
+    Frame segFrame(Vector(0.0, 0.0, 0.4));
+    RigidBodyInertia segInertia(2.0, Vector(0.0, 0.0, 0.2),
+                                 RotationalInertia(0.02666667, 0.02666667, 1e-4));
+
+    Chain chain;
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+
+    unsigned int nj = chain.getNrOfJoints();
+    CPPUNIT_ASSERT_EQUAL((unsigned int)3, nj);
+
+    JntArray q(nj), qd(nj), ff(nj);
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        q(i) = 0.2 + 0.1 * i;
+        qd(i) = -0.3 + 0.2 * i;
+        ff(i) = 1.0 - 0.5 * i;
+    }
+
+    Wrench f_tool(Vector(3.0, -2.0, 1.0), Vector(0.5, 0.0, -0.5));
+    Wrenches f_ext(3);
+    f_ext[2] = f_tool;
+    Wrenches f_ext_zero(3);
+
+    unsigned int nc = 3;
+    Jacobian alpha(nc);
+    alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector::Zero()));
+    alpha.setColumn(1, Twist(Vector(0.0, 0.0, 1.0), Vector::Zero()));
+    alpha.setColumn(2, Twist(Vector::Zero(), Vector(0.0, 1.0, 0.0)));
+
+    JntArray beta(nc);
+    beta(0) = 0.1;
+    beta(1) = -0.1;
+    beta(2) = 0.05;
+
+    Twist root_acc(Vector(0.0, 0.0, 9.81), Vector::Zero());
+
+    // Case 1: default weights are a no-op -- must be exact, not just within eps.
+    ChainHdSolver_Vereshchagin solverDefault(chain, root_acc, nc);
+    JntArray qddDefault(nj), ctDefault(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverDefault.CartToJnt(q, qd, qddDefault, alpha, beta, f_ext, ff, ctDefault));
+
+    ChainHdSolver_Vereshchagin solverOnes(chain, root_acc, nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverOnes.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Ones(nc)));
+    JntArray qddOnes(nj), ctOnes(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverOnes.CartToJnt(q, qd, qddOnes, alpha, beta, f_ext, ff, ctOnes));
+
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        CPPUNIT_ASSERT_EQUAL(qddDefault(i), qddOnes(i));
+        CPPUNIT_ASSERT_EQUAL(ctDefault(i), ctOnes(i));
+    }
+
+    // Case 2: w_fext = 0 makes the constraint blind to the wrench -- solving with
+    // and without the wrench (both at w_fext = 0) must give the same result.
+    ChainHdSolver_Vereshchagin solverBlindWrench(chain, root_acc, nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverBlindWrench.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Ones(nc)));
+    JntArray qddBlindWrench(nj), ctBlindWrench(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverBlindWrench.CartToJnt(q, qd, qddBlindWrench, alpha, beta, f_ext, ff, ctBlindWrench));
+
+    ChainHdSolver_Vereshchagin solverBlindNoWrench(chain, root_acc, nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverBlindNoWrench.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Ones(nc)));
+    JntArray qddBlindNoWrench(nj), ctBlindNoWrench(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverBlindNoWrench.CartToJnt(q, qd, qddBlindNoWrench, alpha, beta, f_ext_zero, ff, ctBlindNoWrench));
+
+    for (unsigned int i = 0; i < nj; i++)
+        CPPUNIT_ASSERT(Equal(ctBlindWrench(i), ctBlindNoWrench(i), eps));
+
+    // Case 3: w_fext = 1 makes the constraint fight the wrench -- the same
+    // with/without-wrench comparison must now differ, giving case 2 its meaning.
+    ChainHdSolver_Vereshchagin solverFightWrench(chain, root_acc, nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverFightWrench.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Ones(nc)));
+    JntArray qddFightWrench(nj), ctFightWrench(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverFightWrench.CartToJnt(q, qd, qddFightWrench, alpha, beta, f_ext, ff, ctFightWrench));
+
+    ChainHdSolver_Vereshchagin solverFightNoWrench(chain, root_acc, nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverFightNoWrench.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Ones(nc)));
+    JntArray qddFightNoWrench(nj), ctFightNoWrench(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverFightNoWrench.CartToJnt(q, qd, qddFightNoWrench, alpha, beta, f_ext_zero, ff, ctFightNoWrench));
+
+    bool anyDiffers = false;
+    for (unsigned int i = 0; i < nj; i++)
+        if (std::fabs(ctFightWrench(i) - ctFightNoWrench(i)) > eps)
+            anyDiffers = true;
+    CPPUNIT_ASSERT(anyDiffers);
+
+    // Case 4: per-direction weighting is independent -- a mixed weight vector
+    // must differ from both the all-ones and the all-zeros results.
+    ChainHdSolver_Vereshchagin solverMixed(chain, root_acc, nc);
+    Eigen::VectorXd w_mixed(nc);
+    w_mixed << 1.0, 0.0, 1.0;
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverMixed.setDriverWeights(w_mixed, Eigen::VectorXd::Ones(nc)));
+    JntArray qddMixed(nj), ctMixed(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverMixed.CartToJnt(q, qd, qddMixed, alpha, beta, f_ext, ff, ctMixed));
+
+    bool differsFromOnes = false;
+    bool differsFromZeros = false;
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        if (std::fabs(ctMixed(i) - ctFightWrench(i)) > eps) differsFromOnes = true;
+        if (std::fabs(ctMixed(i) - ctBlindWrench(i)) > eps) differsFromZeros = true;
+    }
+    CPPUNIT_ASSERT(differsFromOnes);
+    CPPUNIT_ASSERT(differsFromZeros);
+
+    // Case 5: size validation -- a rejected call must not alter previously set weights.
+    ChainHdSolver_Vereshchagin solverSize(chain, root_acc, nc);
+    JntArray qddPre(nj), ctPre(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverSize.CartToJnt(q, qd, qddPre, alpha, beta, f_ext, ff, ctPre));
+
+    Eigen::VectorXd badSize = Eigen::VectorXd::Ones(nc + 1);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_SIZE_MISMATCH,
+        solverSize.setDriverWeights(badSize, Eigen::VectorXd::Ones(nc)));
+
+    JntArray qddPost(nj), ctPost(nj);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverSize.CartToJnt(q, qd, qddPost, alpha, beta, f_ext, ff, ctPost));
+
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        CPPUNIT_ASSERT_EQUAL(ctPre(i), ctPost(i));
+        CPPUNIT_ASSERT_EQUAL(qddPre(i), qddPost(i));
+    }
+}
+
 void SolverTest::FkPosVectTest()
 {
     ChainFkSolverPos_recursive fksolver1(chain1);
