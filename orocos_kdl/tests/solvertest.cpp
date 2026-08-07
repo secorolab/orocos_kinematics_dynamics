@@ -1105,6 +1105,87 @@ void SolverTest::VereshchaginTest()
     }
 }
 
+void SolverTest::VereshchaginFixedJointTest()
+{
+    std::cout << "KDL Vereshchagin Hybrid Dynamics Fixed-Joint Test" << std::endl;
+
+    // Two chains that are physically identical: Chain B additionally carries a
+    // zero-length, zero-mass Joint::Fixed segment between its 2nd and 3rd movable
+    // segments. Since it changes nothing physically, both chains must produce
+    // identical joint accelerations and constraint torques.
+    double eps = 1.e-9;
+
+    Joint jointY(Joint::RotY);
+    Frame segFrame(Vector(0.0, 0.0, 0.4));
+    RigidBodyInertia segInertia(2.0, Vector(0.0, 0.0, 0.2),
+                                 RotationalInertia(0.02666667, 0.02666667, 1e-4));
+
+    Chain chainA;
+    chainA.addSegment(Segment(jointY, segFrame, segInertia));
+    chainA.addSegment(Segment(jointY, segFrame, segInertia));
+    chainA.addSegment(Segment(jointY, segFrame, segInertia));
+
+    Chain chainB;
+    chainB.addSegment(Segment(jointY, segFrame, segInertia));
+    chainB.addSegment(Segment(jointY, segFrame, segInertia));
+    chainB.addSegment(Segment(Joint(Joint::Fixed), Frame(Vector(0.0, 0.0, 0.0)), RigidBodyInertia::Zero()));
+    chainB.addSegment(Segment(jointY, segFrame, segInertia));
+
+    unsigned int njA = chainA.getNrOfJoints();
+    unsigned int njB = chainB.getNrOfJoints();
+    CPPUNIT_ASSERT_EQUAL((unsigned int)3, njA);
+    CPPUNIT_ASSERT_EQUAL((unsigned int)3, njB);
+
+    JntArray qA(njA), qdA(njA), qddA(njA), ffA(njA), ctA(njA);
+    JntArray qB(njB), qdB(njB), qddB(njB), ffB(njB), ctB(njB);
+
+    for (unsigned int i = 0; i < 3; i++)
+    {
+        double q_i = 0.2 + 0.1 * i;
+        double qd_i = -0.3 + 0.2 * i;
+        double ff_i = 1.0 - 0.5 * i;
+        qA(i) = qB(i) = q_i;
+        qdA(i) = qdB(i) = qd_i;
+        ffA(i) = ffB(i) = ff_i;
+    }
+
+    Wrench f_tool(Vector(3.0, -2.0, 1.0), Vector(0.5, 0.0, -0.5));
+    Wrenches f_extA(3);
+    f_extA[2] = f_tool;
+    Wrenches f_extB(4);
+    f_extB[3] = f_tool;
+
+    unsigned int nc = 3;
+    Jacobian alpha(nc);
+    alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector::Zero()));
+    alpha.setColumn(1, Twist(Vector(0.0, 0.0, 1.0), Vector::Zero()));
+    alpha.setColumn(2, Twist(Vector::Zero(), Vector(0.0, 1.0, 0.0)));
+
+    JntArray beta(nc);
+    beta(0) = 0.1;
+    beta(1) = -0.1;
+    beta(2) = 0.05;
+
+    Twist root_acc(Vector(0.0, 0.0, 9.81), Vector::Zero());
+
+    ChainHdSolver_Vereshchagin solverA(chainA, root_acc, nc);
+    ChainHdSolver_Vereshchagin solverB(chainB, root_acc, nc);
+
+    int retA = solverA.CartToJnt(qA, qdA, qddA, alpha, beta, f_extA, ffA, ctA);
+    int retB = solverB.CartToJnt(qB, qdB, qddB, alpha, beta, f_extB, ffB, ctB);
+
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, retA);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, retB);
+
+    for (unsigned int i = 0; i < 3; i++)
+    {
+        CPPUNIT_ASSERT(qddB(i) == qddB(i)); // not NaN
+        CPPUNIT_ASSERT(ctB(i) == ctB(i)); // not NaN
+        CPPUNIT_ASSERT(Equal(qddA(i), qddB(i), eps));
+        CPPUNIT_ASSERT(Equal(ctA(i), ctB(i), eps));
+    }
+}
+
 void SolverTest::FkPosVectTest()
 {
     ChainFkSolverPos_recursive fksolver1(chain1);
