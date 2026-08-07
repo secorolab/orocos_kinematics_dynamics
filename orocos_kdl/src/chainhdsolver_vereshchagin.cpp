@@ -44,6 +44,10 @@ ChainHdSolver_Vereshchagin::ChainHdSolver_Vereshchagin(const Chain& chain_, cons
 
     // Provide the necessary memory for storing the total torque acting on each joint
     total_torques = Eigen::VectorXd::Zero(nj);
+
+    // Default driver weights: fully compensate both drivers, i.e. today's behaviour.
+    w_f_ext = Eigen::VectorXd::Ones(nc);
+    w_ff_torques = Eigen::VectorXd::Ones(nc);
 }
 
 void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
@@ -51,6 +55,17 @@ void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
     nj = chain.getNrOfJoints();
     total_torques = Eigen::VectorXd::Zero(nj);
     results.resize(ns+1,segment_info(nc));
+    w_f_ext = Eigen::VectorXd::Ones(nc);
+    w_ff_torques = Eigen::VectorXd::Ones(nc);
+}
+
+int ChainHdSolver_Vereshchagin::setDriverWeights(const Eigen::VectorXd& w_f_ext_, const Eigen::VectorXd& w_ff_torques_)
+{
+    if ((unsigned int)w_f_ext_.size() != nc || (unsigned int)w_ff_torques_.size() != nc)
+        return (error = E_SIZE_MISMATCH);
+    w_f_ext = w_f_ext_;
+    w_ff_torques = w_ff_torques_;
+    return (error = E_NOERROR);
 }
 
 int ChainHdSolver_Vereshchagin::CartToJnt(const JntArray &q, const JntArray &q_dot, JntArray &q_dotdot, const Jacobian& alfa, const JntArray& beta, const Wrenches& f_ext, const JntArray &ff_torques, JntArray &constraint_torques)
@@ -147,6 +162,8 @@ void ChainHdSolver_Vereshchagin::initial_upwards_sweep(const JntArray &q, const 
         //external forces are taken into account through s.U.
         Wrench FextLocal = F_total.M.Inverse() * f_ext[i];
         s.U = s.v * (s.H * s.v) - FextLocal; //f_ext[i];
+        s.U_fext = -FextLocal;      // external-wrench channel
+        s.U_ff = Wrench::Zero();    // feed-forward channel is seeded at the joint, not the segment
     }
 
 }
@@ -170,8 +187,12 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
         {
             s.P_tilde = s.H;
             s.R_tilde = s.U;
+            s.R_tilde_fext = s.U_fext;
+            s.R_tilde_ff = s.U_ff;
             s.M.setZero();
             s.G.setZero();
+            s.G_fext.setZero();
+            s.G_ff.setZero();
             //changeBase(alfa_N,F_total.M.Inverse(),alfa_N2);
             for (unsigned int r = 0; r < 3; r++)
                 for (unsigned int c = 0; c < nc; c++)
@@ -230,6 +251,22 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
                 Vector6d vCiZDu;
                 vCiZDu << Eigen::Vector3d::Map(CiZDu.rot.data), Eigen::Vector3d::Map(CiZDu.vel.data);
                 s.G.noalias() += child.E.transpose() * vCiZDu;
+
+                //per-driver channels, same recursion minus the nature terms (child.C is nature-only)
+                s.R_tilde_fext = s.U_fext + child.R_fext + (child.PZ / child.D) * child.u_fext;
+                s.R_tilde_ff   = s.U_ff   + child.R_ff   + (child.PZ / child.D) * child.u_ff;
+
+                s.G_fext = child.G_fext;
+                Twist ZDu_fext = (child.Z / child.D) * child.u_fext;
+                Vector6d vZDu_fext;
+                vZDu_fext << Eigen::Vector3d::Map(ZDu_fext.rot.data), Eigen::Vector3d::Map(ZDu_fext.vel.data);
+                s.G_fext.noalias() += child.E.transpose() * vZDu_fext;
+
+                s.G_ff = child.G_ff;
+                Twist ZDu_ff = (child.Z / child.D) * child.u_ff;
+                Vector6d vZDu_ff;
+                vZDu_ff << Eigen::Vector3d::Map(ZDu_ff.rot.data), Eigen::Vector3d::Map(ZDu_ff.vel.data);
+                s.G_ff.noalias() += child.E.transpose() * vZDu_ff;
             }
             else
             {
@@ -245,6 +282,13 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
                 Vector6d vC;
                 vC << Eigen::Vector3d::Map(child.C.rot.data), Eigen::Vector3d::Map(child.C.vel.data);
                 s.G.noalias() += child.E.transpose() * vC;
+
+                //per-driver channels: no Z/D*u accumulation term, it is the zero limit
+                //(child.Z = child.D = 0 for a fixed joint), mirroring s.G above.
+                s.R_tilde_fext = s.U_fext + child.R_fext;
+                s.R_tilde_ff   = s.U_ff   + child.R_ff;
+                s.G_fext = child.G_fext;
+                s.G_ff = child.G_ff;
             }
         }
         if (i != 0)
@@ -254,6 +298,8 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
             s.P = s.F * s.P_tilde;
             //equation b)
             s.R = s.F * s.R_tilde;
+            s.R_fext = s.F * s.R_tilde_fext;
+            s.R_ff = s.F * s.R_tilde_ff;
             //equation c), in matrix: torques above forces, so switch and switch back
             for (unsigned int c = 0; c < nc; c++)
             {
@@ -285,9 +331,17 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
             //projection of coriolis and centrepital forces into joint subspace (0 0 Z)
             s.totalBias = -dot(s.Z, s.R + s.PC);
             if (chain.getSegment(i - 1).getJoint().getType() != Joint::Fixed)
+            {
                 s.u = ff_torques(j) + s.totalBias;
+                s.u_fext = -dot(s.Z, s.R_fext);
+                s.u_ff = ff_torques(j) - dot(s.Z, s.R_ff);
+            }
             else
+            {
                 s.u = s.totalBias; //no joint-space DOF, so no feedforward torque to add; Z=0 makes totalBias 0 too
+                s.u_fext = 0.0;
+                s.u_ff = 0.0;
+            }
 
             //Matrix form of Z, put rotations above translations
             Vector6d vZ;
@@ -330,6 +384,12 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     //nu_sum.setZero();
     nu_sum += beta.data;
     nu_sum -= results[0].G;
+
+    // Credit each driver's already-generated acceleration energy only in
+    // proportion to its weight. With unit weights both correction terms are
+    // exactly zero and this reduces to nu_sum -= results[0].G.
+    nu_sum += (Eigen::VectorXd::Ones(nc) - w_f_ext).cwiseProduct(results[0].G_fext);
+    nu_sum += (Eigen::VectorXd::Ones(nc) - w_ff_torques).cwiseProduct(results[0].G_ff);
 
     //equation f) nu = M_0_inverse*(beta_N - E0_tilde`*acc0 - G0)
     nu.noalias() = M_0_inverse * nu_sum;
