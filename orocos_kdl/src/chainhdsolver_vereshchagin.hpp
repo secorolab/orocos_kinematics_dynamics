@@ -212,7 +212,21 @@ namespace KDL
  * in respective directions. Namely, each column of matrix **alpha** has the value of **1** in the respective
  * direction in which constraint force works, thus it follows that the value of acceleration energy setpoint is
  * the same as the value of Cartesian acceleration, in the respective direction.
- * 
+ *
+ * #### A note on gravity: beta is a gravity-offset acceleration
+ *
+ * This solver takes gravity into account by setting the **root_acc** parameter (passed to the constructor)
+ * to the **negative** of the gravitational acceleration [4]. As a consequence, every Cartesian acceleration
+ * the solver reasons about internally -- including the one constrained via **alpha** / **beta**, and the one
+ * returned by **getTransformedLinkAcceleration** -- is a *gravity-offset* acceleration
+ * `X_dotdot' = X_dotdot - a_g`, not the acceleration one would measure in an inertial base frame.
+ *
+ * In practice this means that to constrain the end-effector's **true** base-frame acceleration to some
+ * `X_dotdot_desired`, the caller must supply `beta = alpha^T * (X_dotdot_desired - a_g)`, which with the sign
+ * convention above is `beta = alpha^T * X_dotdot_desired + alpha^T * root_acc`. In particular, to hold the
+ * end-effector **still** under gravity, `beta = alpha^T * root_acc`, **not** `beta = 0`: passing zero commands
+ * free-fall, since it asks for zero gravity-offset acceleration rather than zero true acceleration.
+ *
  * #### External Forces: f_ext
  * 
  * This type of driver can be used for specifying **physical** (but not artificial, i.e. not task-introduced)

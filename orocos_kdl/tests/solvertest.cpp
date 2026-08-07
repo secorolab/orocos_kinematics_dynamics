@@ -1105,6 +1105,59 @@ void SolverTest::VereshchaginTest()
     }
 }
 
+void SolverTest::VereshchaginGravityOffsetTest()
+{
+    std::cout << "KDL Vereshchagin Gravity Offset Test" << std::endl;
+
+    // Pins the convention documented above ChainHdSolver_Vereshchagin: beta is a
+    // GRAVITY-OFFSET acceleration setpoint, not the true base-frame acceleration.
+    // beta = 0 does NOT hold the end-effector still -- it commands free-fall.
+    double eps = 1.e-9;
+
+    Joint jointY(Joint::RotY);
+    Frame segFrame(Vector(0.0, 0.0, 0.4));
+    RigidBodyInertia segInertia(2.0, Vector(0.0, 0.0, 0.2),
+                                 RotationalInertia(0.02666667, 0.02666667, 1e-4));
+
+    Chain chain;
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+    chain.addSegment(Segment(jointY, segFrame, segInertia));
+
+    unsigned int nj = chain.getNrOfJoints();
+    JntArray q(nj), qd(nj), qdd(nj), ff(nj), ct(nj);
+    q(0) = 0.3; q(1) = -0.6; q(2) = 0.4;
+    // qd, ff default-initialize to zero.
+
+    Wrenches f_ext_zero(3);
+
+    unsigned int nc = 3;
+    Jacobian alpha(nc);
+    alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector::Zero()));
+    alpha.setColumn(1, Twist(Vector(0.0, 0.0, 1.0), Vector::Zero()));
+    alpha.setColumn(2, Twist(Vector::Zero(), Vector(0.0, 1.0, 0.0)));
+
+    Twist root_acc(Vector(0.0, 0.0, 9.81), Vector::Zero());
+
+    // Case A: beta = 0 does NOT hold the arm still -- it free-falls.
+    ChainHdSolver_Vereshchagin solverA(chain, root_acc, nc);
+    JntArray beta_zero(nc);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverA.CartToJnt(q, qd, qdd, alpha, beta_zero, f_ext_zero, ff, ct));
+    CPPUNIT_ASSERT(std::abs(qdd(0)) > 1.0);
+
+    // Case B: beta = alpha^T * root_acc DOES hold the arm still.
+    ChainHdSolver_Vereshchagin solverB(chain, root_acc, nc);
+    JntArray beta_shifted(nc);
+    beta_shifted(0) = 0.0;
+    beta_shifted(1) = 9.81;
+    beta_shifted(2) = 0.0;
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverB.CartToJnt(q, qd, qdd, alpha, beta_shifted, f_ext_zero, ff, ct));
+    for (unsigned int i = 0; i < nj; i++)
+        CPPUNIT_ASSERT(Equal(qdd(i), 0.0, eps));
+}
+
 void SolverTest::VereshchaginFixedJointTest()
 {
     std::cout << "KDL Vereshchagin Hybrid Dynamics Fixed-Joint Test" << std::endl;
