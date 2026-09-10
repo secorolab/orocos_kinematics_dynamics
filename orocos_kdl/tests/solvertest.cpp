@@ -231,6 +231,66 @@ void SolverTest::tearDown()
 //     delete iksolverpos;
 }
 
+void SolverTest::VereshchaginFextExcludesNaturalDynamicsTest()
+{
+    Chain chain;
+    const double length = 0.4;
+    const double mass = 2.0;
+    for (unsigned int i = 0; i < 3; ++i)
+    {
+        const RigidBodyInertia inertia(
+            mass, Vector(0.0, 0.0, length / 2.0),
+            RotationalInertia(mass * length * length / 12.0,
+                              mass * length * length / 12.0, 1e-4));
+        chain.addSegment(Segment(Joint(Joint::RotY), Frame(Vector(0.0, 0.0, length)), inertia));
+    }
+    chain.addSegment(Segment(Joint(Joint::Fixed), Frame(Vector(0.0, 0.0, 0.1))));
+
+    const unsigned int nj = chain.getNrOfJoints();
+    const unsigned int nc = 6;
+    ChainHdSolver_Vereshchagin_Fext_FixedJoint solver(
+        chain, Twist(Vector(0.0, 0.0, 9.81), Vector::Zero()), nc);
+
+    JntArray q(nj), qdot(nj), qdotdot(nj), beta(nc), ff_torques(nj), constraint_torques(nj);
+    q(0) = 0.3;
+    q(1) = -0.6;
+    q(2) = 0.4;
+    qdot(0) = 1.0;
+    qdot(1) = -1.5;
+    qdot(2) = 2.0;
+
+    Jacobian alpha(nc);
+    Wrenches f_ext(chain.getNrOfSegments());
+    SetToZero(alpha);
+    SetToZero(beta);
+    SetToZero(ff_torques);
+    for (unsigned int i = 0; i < f_ext.size(); ++i)
+        f_ext[i] = Wrench::Zero();
+
+    CPPUNIT_ASSERT_EQUAL(0, solver.CartToJnt(
+                                q, qdot, qdotdot, alpha, beta, f_ext,
+                                ff_torques, constraint_torques));
+    for (unsigned int i = 0; i < nj; ++i)
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(0.0, constraint_torques(i), 1e-12);
+
+    const Wrench applied_wrench(Vector(0.0, 0.0, -10.0), Vector::Zero());
+    f_ext.back() = applied_wrench;
+    CPPUNIT_ASSERT_EQUAL(0, solver.CartToJnt(
+                                q, qdot, qdotdot, alpha, beta, f_ext,
+                                ff_torques, constraint_torques));
+
+    ChainJntToJacSolver jacobian_solver(chain);
+    Jacobian jacobian(nj);
+    CPPUNIT_ASSERT_EQUAL(0, jacobian_solver.JntToJac(q, jacobian));
+    Eigen::Matrix<double, 6, 1> wrench;
+    wrench << applied_wrench(0), applied_wrench(1), applied_wrench(2),
+              applied_wrench(3), applied_wrench(4), applied_wrench(5);
+    JntArray expected_torques(nj);
+    expected_torques.data = jacobian.data.transpose() * wrench;
+    for (unsigned int i = 0; i < nj; ++i)
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(expected_torques(i), constraint_torques(i), 1e-12);
+}
+
 void SolverTest::UpdateChainTest()
 {
     ChainFkSolverPos_recursive fksolverpos(chain2);

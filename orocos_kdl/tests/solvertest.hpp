@@ -16,6 +16,7 @@
 #include <chainjnttojacsolver.hpp>
 #include <chainjnttojacdotsolver.hpp>
 #include <chainhdsolver_vereshchagin.hpp>
+#include <chainhdsolver_vereshchagin_fext_fixed_joint.hpp>
 #include <chainidsolver_recursive_newton_euler.hpp>
 #include <chaindynparam.hpp>
 #include <chainidsolver_recursive_newton_euler.hpp>
@@ -34,6 +35,7 @@ class SolverTest : public CppUnit::TestFixture
     CPPUNIT_TEST(FkVelAndIkVelTest );
     CPPUNIT_TEST(FkPosAndIkPosTest );
     CPPUNIT_TEST(VereshchaginTest );
+    CPPUNIT_TEST(VereshchaginFextExcludesNaturalDynamicsTest );
     CPPUNIT_TEST(ExternalWrenchEstimatorTest );
     CPPUNIT_TEST(IkSingularValueTest );
     CPPUNIT_TEST(IkVelSolverWDLSTest );
@@ -55,6 +57,7 @@ public:
     void FkVelAndIkVelTest();
     void FkPosAndIkPosTest();
     void VereshchaginTest();
+    void VereshchaginFextExcludesNaturalDynamicsTest();
     void ExternalWrenchEstimatorTest();
     void IkSingularValueTest() ;
     void IkVelSolverWDLSTest();
@@ -77,4 +80,3 @@ private:
 
 };
 #endif
-

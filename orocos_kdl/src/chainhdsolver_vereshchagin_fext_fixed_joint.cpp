@@ -167,6 +167,7 @@ void ChainHdSolver_Vereshchagin_Fext_FixedJoint::initial_upwards_sweep(const Jnt
         // with centrifugal/Coriolis bias in s.U. The velocity product is accounted
         // for via s.C in the recursion instead.
         Wrench FextLocal = F_total.M.Inverse() * f_ext[i];
+        s.external_wrench = FextLocal;
         s.U = -FextLocal;
     }
 }
@@ -406,6 +407,22 @@ void ChainHdSolver_Vereshchagin_Fext_FixedJoint::final_upwards_sweep(JntArray &q
             s.acc = s.F.Inverse(a_p + s.C);
             // j is NOT incremented — fixed joints have no entry in q_dotdot/constraint_torques
         }
+    }
+
+    // Return J^T F directly; the acceleration-force balance also contains
+    // gravity and velocity bias that do not originate from f_ext.
+    int joint_index = nj - 1;
+    for (int i = ns - 1; i >= 0; --i)
+    {
+        segment_info& s = results[i + 1];
+        const Wrench wrench_at_joint = s.F * s.external_wrench;
+        if (chain.getSegment(i).getJoint().getType() != Joint::Fixed)
+        {
+            constraint_torques(joint_index) = dot(s.Z, wrench_at_joint);
+            --joint_index;
+        }
+        if (i != 0)
+            results[i].external_wrench += wrench_at_joint;
     }
 }
 

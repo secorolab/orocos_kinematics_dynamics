@@ -398,7 +398,7 @@ public:
      *
      * Output parameters:
      * \param q_dotdot The resulting joint accelerations
-     * \param constraint_torques The resulting joint constraint torques (what each joint feels due to the constraint forces acting on the end-effector)
+     * \param constraint_torques The generalized joint forces due only to f_ext
      *
      * @return error/success code
      */
@@ -490,6 +490,7 @@ private:
         Twist v; //twist
         Twist acc; //acceleration twist
         Wrench U; //wrench p of the bias forces (in cartesian space)
+        Wrench external_wrench;
         Wrench R; //wrench p of the bias forces
         Wrench R_tilde; //vector of wrench p of the bias forces (new) in matrix form
         Twist C; //constraint
