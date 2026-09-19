@@ -45,9 +45,9 @@ ChainHdSolver_Vereshchagin::ChainHdSolver_Vereshchagin(const Chain& chain_, cons
     // Provide the necessary memory for storing the total torque acting on each joint
     total_torques = Eigen::VectorXd::Zero(nj);
 
-    // Default driver weights: fully compensate both drivers, i.e. today's behaviour.
-    w_f_ext = Eigen::VectorXd::Ones(nc);
-    w_ff_torques = Eigen::VectorXd::Ones(nc);
+    // Zero pass-through by default: the constraint compensates both drivers, the classic solver.
+    w_f_ext = Eigen::VectorXd::Zero(nc);
+    w_ff_torques = Eigen::VectorXd::Zero(nc);
 }
 
 void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
@@ -55,8 +55,8 @@ void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
     nj = chain.getNrOfJoints();
     total_torques = Eigen::VectorXd::Zero(nj);
     results.resize(ns+1,segment_info(nc));
-    w_f_ext = Eigen::VectorXd::Ones(nc);
-    w_ff_torques = Eigen::VectorXd::Ones(nc);
+    w_f_ext = Eigen::VectorXd::Zero(nc);
+    w_ff_torques = Eigen::VectorXd::Zero(nc);
 }
 
 int ChainHdSolver_Vereshchagin::setDriverWeights(const Eigen::VectorXd& w_f_ext_, const Eigen::VectorXd& w_ff_torques_)
@@ -385,11 +385,10 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     nu_sum += beta.data;
     nu_sum -= results[0].G;
 
-    // Credit each driver's already-generated acceleration energy only in
-    // proportion to its weight. With unit weights both correction terms are
-    // exactly zero and this reduces to nu_sum -= results[0].G.
-    nu_sum += (Eigen::VectorXd::Ones(nc) - w_f_ext).cwiseProduct(results[0].G_fext);
-    nu_sum += (Eigen::VectorXd::Ones(nc) - w_ff_torques).cwiseProduct(results[0].G_ff);
+    // Eq. (3.42) of [3]: the weighted share of each driver's acceleration energy is added to the
+    // target, so the constraint leaves that share uncompensated. Zero weights add nothing.
+    nu_sum += w_f_ext.cwiseProduct(results[0].G_fext);
+    nu_sum += w_ff_torques.cwiseProduct(results[0].G_ff);
 
     //equation f) nu = M_0_inverse*(beta_N - E0_tilde`*acc0 - G0)
     nu.noalias() = M_0_inverse * nu_sum;

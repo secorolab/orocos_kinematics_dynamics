@@ -1293,31 +1293,31 @@ void SolverTest::VereshchaginDriverWeightingTest()
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverDefault.CartToJnt(q, qd, qddDefault, alpha, beta, f_ext, ff, ctDefault));
 
-    ChainHdSolver_Vereshchagin solverOnes(chain, root_acc, nc);
+    ChainHdSolver_Vereshchagin solverZeros(chain, root_acc, nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverOnes.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Ones(nc)));
-    JntArray qddOnes(nj), ctOnes(nj);
+        solverZeros.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Zero(nc)));
+    JntArray qddZeros(nj), ctZeros(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverOnes.CartToJnt(q, qd, qddOnes, alpha, beta, f_ext, ff, ctOnes));
+        solverZeros.CartToJnt(q, qd, qddZeros, alpha, beta, f_ext, ff, ctZeros));
 
     for (unsigned int i = 0; i < nj; i++)
     {
-        CPPUNIT_ASSERT_EQUAL(qddDefault(i), qddOnes(i));
-        CPPUNIT_ASSERT_EQUAL(ctDefault(i), ctOnes(i));
+        CPPUNIT_ASSERT_EQUAL(qddDefault(i), qddZeros(i));
+        CPPUNIT_ASSERT_EQUAL(ctDefault(i), ctZeros(i));
     }
 
-    // Case 2: w_fext = 0 makes the constraint blind to the wrench -- solving with
-    // and without the wrench (both at w_fext = 0) must give the same result.
+    // Case 2: w_fext = 1 makes the constraint blind to the wrench -- solving with
+    // and without the wrench (both at w_fext = 1) must give the same constraint torques.
     ChainHdSolver_Vereshchagin solverBlindWrench(chain, root_acc, nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverBlindWrench.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Ones(nc)));
+        solverBlindWrench.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Zero(nc)));
     JntArray qddBlindWrench(nj), ctBlindWrench(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverBlindWrench.CartToJnt(q, qd, qddBlindWrench, alpha, beta, f_ext, ff, ctBlindWrench));
 
     ChainHdSolver_Vereshchagin solverBlindNoWrench(chain, root_acc, nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverBlindNoWrench.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Ones(nc)));
+        solverBlindNoWrench.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Zero(nc)));
     JntArray qddBlindNoWrench(nj), ctBlindNoWrench(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverBlindNoWrench.CartToJnt(q, qd, qddBlindNoWrench, alpha, beta, f_ext_zero, ff, ctBlindNoWrench));
@@ -1325,18 +1325,18 @@ void SolverTest::VereshchaginDriverWeightingTest()
     for (unsigned int i = 0; i < nj; i++)
         CPPUNIT_ASSERT(Equal(ctBlindWrench(i), ctBlindNoWrench(i), eps));
 
-    // Case 3: w_fext = 1 makes the constraint fight the wrench -- the same
+    // Case 3: w_fext = 0 makes the constraint fight the wrench -- the same
     // with/without-wrench comparison must now differ, giving case 2 its meaning.
     ChainHdSolver_Vereshchagin solverFightWrench(chain, root_acc, nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverFightWrench.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Ones(nc)));
+        solverFightWrench.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Zero(nc)));
     JntArray qddFightWrench(nj), ctFightWrench(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverFightWrench.CartToJnt(q, qd, qddFightWrench, alpha, beta, f_ext, ff, ctFightWrench));
 
     ChainHdSolver_Vereshchagin solverFightNoWrench(chain, root_acc, nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverFightNoWrench.setDriverWeights(Eigen::VectorXd::Ones(nc), Eigen::VectorXd::Ones(nc)));
+        solverFightNoWrench.setDriverWeights(Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Zero(nc)));
     JntArray qddFightNoWrench(nj), ctFightNoWrench(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverFightNoWrench.CartToJnt(q, qd, qddFightNoWrench, alpha, beta, f_ext_zero, ff, ctFightNoWrench));
@@ -1351,9 +1351,9 @@ void SolverTest::VereshchaginDriverWeightingTest()
     // must differ from both the all-ones and the all-zeros results.
     ChainHdSolver_Vereshchagin solverMixed(chain, root_acc, nc);
     Eigen::VectorXd w_mixed(nc);
-    w_mixed << 1.0, 0.0, 1.0;
+    w_mixed << 0.0, 1.0, 0.0;
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverMixed.setDriverWeights(w_mixed, Eigen::VectorXd::Ones(nc)));
+        solverMixed.setDriverWeights(w_mixed, Eigen::VectorXd::Zero(nc)));
     JntArray qddMixed(nj), ctMixed(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverMixed.CartToJnt(q, qd, qddMixed, alpha, beta, f_ext, ff, ctMixed));
@@ -1376,7 +1376,7 @@ void SolverTest::VereshchaginDriverWeightingTest()
 
     Eigen::VectorXd badSize = Eigen::VectorXd::Ones(nc + 1);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_SIZE_MISMATCH,
-        solverSize.setDriverWeights(badSize, Eigen::VectorXd::Ones(nc)));
+        solverSize.setDriverWeights(badSize, Eigen::VectorXd::Zero(nc)));
 
     JntArray qddPost(nj), ctPost(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,

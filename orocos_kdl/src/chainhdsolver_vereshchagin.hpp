@@ -309,19 +309,29 @@ namespace KDL
  *
  * The **setDriverWeights** method accepts two **nc x 1** weight vectors, one per constraint direction (the columns
  * of **alpha**): one for the external wrenches (**f_ext**) and one for the feed-forward joint torques (**ff_torques**).
- * Per Eq. (3.42) of [3], each weight controls how much of that driver's contribution to the acceleration energy the
- * constraint is credited for solving:
+ * Following Eq. (3.42) of [3], **b_control = w_posture * b_posture + w_ee * b_ee**, each weight is the share of the
+ * acceleration energy that driver generates at the end-effector which is added to the constraint target, i.e. the
+ * share the constraint leaves uncompensated:
  *
- *  * **w = 1** (the default) -- the constraint fully compensates that driver in that direction, reproducing the
+ *  * **w = 0** (the default) -- the constraint fully compensates that driver in that direction, reproducing the
  *    classic Popov-Vereshchagin prioritization described above.
  *
- *  * **w = 0** -- the constraint is blind to that driver in that direction: the driver's effect passes through to
- *    the end-effector instead of being compensated.
+ *  * **w = 1** -- the driver passes through: the end-effector accelerates by the constrained setpoint plus the
+ *    acceleration that driver alone would produce. The joint accelerations then change by exactly
+ *    **M^-1 * J^T * f_ext** (or **M^-1 * ff_torques**) with respect to the same solve without the driver.
  *
- *  * **0 < w < 1** -- partial credit, blending the two behaviors.
+ *  * **0 < w < 1** -- a linear blend of the two.
+ *
+ * The thesis's **w_ee** (the weight on the setpoint itself) is not a separate parameter: scale **beta**.
  *
  * Because the weights are vectors rather than scalars, this can be applied per constraint direction, e.g. compliant
  * along a contact normal while remaining stiff in the other constrained directions.
+ *
+ * Note what **f_ext** means under a non-zero weight. The solver treats **f_ext** as a force acting on the segment.
+ * With **w = 0** that is a disturbance the constraint rejects, e.g. a measured contact force. With **w = 1** the
+ * arm's motion (and, through inverse dynamics, its joint torque) carries the full **J^T * f_ext**, which is what a
+ * controller uses to make the arm **exert** a modelled wrench on the environment. Sensed and commanded wrenches
+ * enter through the same input; the weight decides which one it is.
  *
  * ### Using the algorithm for solving forward dynamics (FD) problem
  * 
@@ -440,18 +450,20 @@ public:
     virtual void updateInternalDataStructures();
 
     /**
-     * Set the per-driver weights used when solving for the constraint force
-     * magnitudes. Each weight is an nc-vector, one entry per column of alpha.
+     * Set the per-driver pass-through weights used when solving for the
+     * constraint force magnitudes. Each weight is an nc-vector, one entry per
+     * column of alpha.
      *
-     * A weight of 1.0 (the default) means the acceleration constraint fully
+     * A weight of 0.0 (the default) means the acceleration constraint fully
      * compensates that driver, i.e. the constraint is satisfied exactly
      * regardless of the driver -- this is the classic Popov-Vereshchagin
-     * prioritisation. A weight of 0.0 means the constraint ignores that
-     * driver, letting its effect pass through to the constrained segment.
-     * Values in between blend the two, as in Eq. (3.42) of [3].
+     * prioritisation. A weight of 1.0 means the driver passes through: the
+     * constrained segment accelerates by the setpoint plus what that driver
+     * alone would produce. Values in between blend the two, as in Eq. (3.42)
+     * of [3], whose w_posture this is.
      *
-     * \param w_f_ext weight per constraint direction for the external wrenches
-     * \param w_ff_torques weight per constraint direction for the feed-forward joint torques
+     * \param w_f_ext pass-through share per constraint direction for the external wrenches
+     * \param w_ff_torques pass-through share per constraint direction for the feed-forward joint torques
      * \return E_NOERROR on success, E_SIZE_MISMATCH if either vector is not of size nc
      */
     int setDriverWeights(const Eigen::VectorXd& w_f_ext, const Eigen::VectorXd& w_ff_torques);
