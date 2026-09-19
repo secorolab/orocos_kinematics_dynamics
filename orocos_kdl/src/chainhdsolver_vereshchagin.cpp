@@ -199,6 +199,8 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
                     s.E_tilde(r, c) = alfa(r + 3, c);
                     s.E_tilde(r + 3, c) = alfa(r, c);
                 }
+            //Kept in root coordinates: constraint_calculation() projects the root acceleration on it.
+            alpha_root = s.E_tilde;
             //Change the reference frame of alfa to the segmentN tip frame
             //F_Total holds end effector frame, if done per segment bases then constraints could be extended to all segments
             Rotation base_to_end = F_total.M.Inverse();
@@ -381,6 +383,9 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     nu_sum.noalias() = -(results[0].E_tilde.transpose() * acc);
     //nu_sum.setZero();
     nu_sum += beta.data;
+    //beta is the true acceleration energy; the recursion runs on accelerations offset by the
+    //root's, so the setpoint is offset the same way before it enters the balance.
+    nu_sum.noalias() += alpha_root.transpose() * acc;
     nu_sum -= results[0].G;
 
     //Eq. (3.42) of [3]: the weighted share of each driver's acceleration energy is added to the
@@ -452,13 +457,14 @@ void ChainHdSolver_Vereshchagin::final_upwards_sweep(JntArray &q_dotdot, JntArra
     }
 }
 
-// Returns Cartesian acceleration of links in robot base coordinates
+// Returns Cartesian acceleration of links in robot base coordinates.
+// The recursion's accelerations are offset by the root's; the offset comes off here.
 void ChainHdSolver_Vereshchagin::getTransformedLinkAcceleration(Twists& x_dotdot)
 {
     assert(x_dotdot.size() == ns + 1);
-    x_dotdot[0] = acc_root;
+    x_dotdot[0] = Twist::Zero();
     for (unsigned int i = 1; i < ns + 1; i++)
-        x_dotdot[i] = results[i].F_base.M * results[i].acc;
+        x_dotdot[i] = results[i].F_base.M * results[i].acc - acc_root;
 }
 
 // Returns total torque acting on each joint (constraints + nature + external forces)
@@ -500,8 +506,7 @@ void ChainHdSolver_Vereshchagin::getLinkCartesianAcceleration(Twists& xDotDot_ba
 
     for (int i = 0; i < ns; i++)
     {
-        xDotDot_base[i] = results[i + 1].F_base.M * results[i + 1].acc;
-        //std::cout << "XDotDot_base[i] " << xDotDot_base[i] << std::endl;
+        xDotDot_base[i] = results[i + 1].F_base.M * results[i + 1].acc - acc_root;
     }
     return;
 }
@@ -529,7 +534,7 @@ void ChainHdSolver_Vereshchagin::getLinkAcceleration(Twists& xDotdot_local)
 {
      for (int i = 0; i < ns; i++)
     {
-        xDotdot_local[i] = results[i + 1].acc;
+        xDotdot_local[i] = results[i + 1].acc - results[i + 1].F_base.M.Inverse(acc_root);
     }
     return;
 

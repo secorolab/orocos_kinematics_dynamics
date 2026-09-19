@@ -34,7 +34,7 @@ class SolverTest : public CppUnit::TestFixture
     CPPUNIT_TEST(FkVelAndIkVelTest );
     CPPUNIT_TEST(FkPosAndIkPosTest );
     CPPUNIT_TEST(VereshchaginTest );
-    CPPUNIT_TEST(VereshchaginGravityOffsetTest );
+    CPPUNIT_TEST(VereshchaginTrueAccelerationTest );
     CPPUNIT_TEST(VereshchaginFixedJointTest );
     CPPUNIT_TEST(VereshchaginDriverWeightingTest );
     CPPUNIT_TEST(VereshchaginDriverPassThroughTest );
@@ -59,7 +59,7 @@ public:
     void FkVelAndIkVelTest();
     void FkPosAndIkPosTest();
     void VereshchaginTest();
-    void VereshchaginGravityOffsetTest();
+    void VereshchaginTrueAccelerationTest();
     void VereshchaginFixedJointTest();
     void VereshchaginDriverWeightingTest();
     void VereshchaginDriverPassThroughTest();

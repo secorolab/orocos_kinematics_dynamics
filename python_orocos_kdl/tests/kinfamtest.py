@@ -211,7 +211,7 @@ class KinfamTestFunctions(unittest.TestCase):
         self.assertEqual(len(nu), nc)
         acc = solver.getTransformedLinkAcceleration([Twist.Zero() for _ in range(ns + 1)])
         self.assertEqual(len(acc), ns + 1)
-        self.assertAlmostEqual(acc[0].vel.z(), 9.81)
+        self.assertAlmostEqual(acc[0].vel.z(), 0.0)
 
     def testFkPosAndJac(self):
         deltaq = 1E-4

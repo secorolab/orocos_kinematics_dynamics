@@ -951,7 +951,7 @@ void SolverTest::VereshchaginTest()
     JntArray beta_energy(number_of_constraints);
     beta_energy(0) = -0.5;
     beta_energy(1) = -0.5;
-    beta_energy(2) =  0.0;
+    beta_energy(2) = -9.81; // free fall in z: beta is the true acceleration, root_Acc below is +9.81
     beta_energy(3) =  0.0; // this value has no impact on computations, since its corresponding constraint is disabled
     beta_energy(4) =  0.0; // this value has no impact on computations, since its corresponding constraint is disabled
     beta_energy(5) =  0.2;
@@ -1106,13 +1106,13 @@ void SolverTest::VereshchaginTest()
     }
 }
 
-void SolverTest::VereshchaginGravityOffsetTest()
+void SolverTest::VereshchaginTrueAccelerationTest()
 {
-    std::cout << "KDL Vereshchagin Gravity Offset Test" << std::endl;
+    std::cout << "KDL Vereshchagin True Acceleration Test" << std::endl;
 
-    // Pins the convention documented above ChainHdSolver_Vereshchagin: beta is a
-    // GRAVITY-OFFSET acceleration setpoint, not the true base-frame acceleration.
-    // beta = 0 does NOT hold the end-effector still -- it commands free-fall.
+    // Pins the convention documented above ChainHdSolver_Vereshchagin: beta and the reported
+    // accelerations are true base-frame accelerations, whatever root_acc carries. beta = 0
+    // holds the end-effector still; free fall has to be asked for.
     double eps = 1.e-9;
 
     Joint jointY(Joint::RotY);
@@ -1140,23 +1140,29 @@ void SolverTest::VereshchaginGravityOffsetTest()
 
     Twist root_acc(Vector(0.0, 0.0, 9.81), Vector::Zero());
 
-    // Case A: beta = 0 does NOT hold the arm still -- it free-falls.
+    // Case A: beta = 0 holds the arm still, and the reported accelerations say so.
     ChainHdSolver_Vereshchagin solverA(chain, root_acc, nc);
     JntArray beta_zero(nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
         solverA.CartToJnt(q, qd, qdd, alpha, beta_zero, f_ext_zero, ff, ct));
-    CPPUNIT_ASSERT(std::abs(qdd(0)) > 1.0);
-
-    // Case B: beta = alpha^T * root_acc DOES hold the arm still.
-    ChainHdSolver_Vereshchagin solverB(chain, root_acc, nc);
-    JntArray beta_shifted(nc);
-    beta_shifted(0) = 0.0;
-    beta_shifted(1) = 9.81;
-    beta_shifted(2) = 0.0;
-    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solverB.CartToJnt(q, qd, qdd, alpha, beta_shifted, f_ext_zero, ff, ct));
     for (unsigned int i = 0; i < nj; i++)
         CPPUNIT_ASSERT(Equal(qdd(i), 0.0, eps));
+    std::vector<Twist> x_dotdot(chain.getNrOfSegments() + 1);
+    solverA.getTransformedLinkAcceleration(x_dotdot);
+    for (unsigned int i = 0; i < x_dotdot.size(); i++)
+        CPPUNIT_ASSERT(Equal(x_dotdot[i], Twist::Zero(), eps));
+
+    // Case B: beta = -alpha^T * root_acc asks for free fall, and gets it.
+    ChainHdSolver_Vereshchagin solverB(chain, root_acc, nc);
+    JntArray beta_fall(nc);
+    beta_fall(0) = 0.0;
+    beta_fall(1) = -9.81;
+    beta_fall(2) = 0.0;
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
+        solverB.CartToJnt(q, qd, qdd, alpha, beta_fall, f_ext_zero, ff, ct));
+    CPPUNIT_ASSERT(std::abs(qdd(0)) > 1.0);
+    solverB.getTransformedLinkAcceleration(x_dotdot);
+    CPPUNIT_ASSERT(Equal(x_dotdot.back().vel.z(), -9.81, eps));
 }
 
 void SolverTest::VereshchaginFixedJointTest()
