@@ -25,6 +25,7 @@
 from builtins import range
 
 import gc
+import math
 import psutil
 from PyKDL import *
 import random
@@ -154,6 +155,63 @@ class KinfamTestFunctions(unittest.TestCase):
             ja[-1] = 1
         with self.assertRaises(IndexError):
             ja[3] = 1
+
+    def testChainHdSolverVereshchagin(self):
+        # The fixture chain is massless, which the dynamics cannot use; build one with inertia.
+        link = RigidBodyInertia(2.0, Vector(0.0, 0.0, 0.2), RotationalInertia(0.02666667, 0.02666667, 1e-4))
+        chain = Chain()
+        chain.addSegment(Segment(Joint(Joint.RotY), Frame(Vector(0.0, 0.0, 0.4)), link))
+        chain.addSegment(Segment(Joint(Joint.RotX), Frame(Vector(0.0, 0.0, 0.4)), link))
+        chain.addSegment(Segment(Joint(Joint.RotY), Frame(Vector(0.0, 0.0, 0.4)), link))
+        chain.addSegment(Segment(Joint(Joint.Fixed), Frame(Vector(0.0, 0.0, 0.1)),
+                                 RigidBodyInertia(0.5, Vector(0.0, 0.0, 0.05), RotationalInertia(1e-3, 1e-3, 1e-3))))
+        n = chain.getNrOfJoints()
+        ns = chain.getNrOfSegments()
+        nc = 2
+        solver = ChainHdSolver_Vereshchagin(chain, Twist(Vector(0.0, 0.0, 9.81), Vector.Zero()), nc)
+        alpha = Jacobian(nc)
+        alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector.Zero()))
+        alpha.setColumn(1, Twist(Vector.Zero(), Vector(0.0, 1.0, 0.0)))
+        q = JntArray(n)
+        qdot = JntArray(n)
+        beta = JntArray(nc)
+        ff_torques = JntArray(n)
+        for i in range(n):
+            q[i] = 0.2 + 0.1 * i
+        f_zero = [Wrench.Zero() for _ in range(ns)]
+        f_ext = [Wrench.Zero() for _ in range(ns)]
+        f_ext[ns - 1] = Wrench(Vector(3.0, -2.0, 1.0), Vector(0.5, 0.0, -0.5))
+
+        def constraint_torques(weights, wrenches):
+            self.assertEqual(solver.setDriverWeights(weights, [0.0] * nc), 0)
+            qddot = JntArray(n)
+            tau = JntArray(n)
+            self.assertEqual(solver.CartToJnt(q, qdot, qddot, alpha, beta, wrenches, ff_torques, tau), 0)
+            return [tau[i] for i in range(n)]
+
+        # Full pass-through: the constraint is blind to the wrench.
+        blind_with = constraint_torques([1.0] * nc, f_ext)
+        blind_without = constraint_torques([1.0] * nc, f_zero)
+        for a, b in zip(blind_with, blind_without):
+            self.assertAlmostEqual(a, b, delta=1e-9)
+        # Default: the constraint compensates it, so the wrench shows in the torques.
+        fight_with = constraint_torques([0.0] * nc, f_ext)
+        fight_without = constraint_torques([0.0] * nc, f_zero)
+        self.assertTrue(any(abs(a - b) > 1e-6 for a, b in zip(fight_with, fight_without)))
+
+        size_mismatch = solver.setDriverWeights([0.0] * (nc + 1), [0.0] * nc)
+        self.assertNotEqual(size_mismatch, 0)
+        self.assertEqual(solver.getError(), size_mismatch)
+        self.assertEqual(solver.strError(size_mismatch), "The size of the input does not match the internal state")
+        self.assertEqual(solver.setDriverWeights([0.0] * nc, [0.0] * (nc + 1)), size_mismatch)
+        total = JntArray(n)
+        solver.getTotalTorque(total)
+        self.assertTrue(all(math.isfinite(total[i]) for i in range(n)))
+        nu = solver.getContraintForceMagnitude([0.0] * nc)
+        self.assertEqual(len(nu), nc)
+        acc = solver.getTransformedLinkAcceleration([Twist.Zero() for _ in range(ns + 1)])
+        self.assertEqual(len(acc), ns + 1)
+        self.assertAlmostEqual(acc[0].vel.z(), 0.0)
 
     def testFkPosAndJac(self):
         deltaq = 1E-4
@@ -386,6 +444,7 @@ def suite():
     suite.addTest(KinfamTestFunctions('testRotationalInertia'))
     suite.addTest(KinfamTestFunctions('testJacobian'))
     suite.addTest(KinfamTestFunctions('testJntArray'))
+    suite.addTest(KinfamTestFunctions('testChainHdSolverVereshchagin'))
     suite.addTest(KinfamTestFunctions('testFkPosAndJac'))
     suite.addTest(KinfamTestFunctions('testFkVelAndJac'))
     suite.addTest(KinfamTestFunctions('testFkVelAndIkVel'))

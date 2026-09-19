@@ -212,7 +212,18 @@ namespace KDL
  * in respective directions. Namely, each column of matrix **alpha** has the value of **1** in the respective
  * direction in which constraint force works, thus it follows that the value of acceleration energy setpoint is
  * the same as the value of Cartesian acceleration, in the respective direction.
- * 
+ *
+ * #### A note on gravity: beta and the reported accelerations are true accelerations
+ *
+ * This solver takes gravity into account by setting the **root_acc** parameter (passed to the constructor)
+ * to the **negative** of the gravitational acceleration [4], so internally every Cartesian acceleration is
+ * offset by **root_acc**. That offset never reaches the interface: **beta** is the acceleration energy of the
+ * **true** base-frame acceleration, **beta = alpha^T * X_dotdot_desired**, and **getTransformedLinkAcceleration**
+ * and the other acceleration getters return true base-frame accelerations. In particular, **beta = 0** in a
+ * constrained direction holds the end-effector's acceleration at zero there; at rest it stays at rest, carried
+ * by the constraint torque. Internally the solver adds **alpha^T * root_acc** to **beta** before the balance of
+ * Eq. (3.37) in [3] and subtracts **root_acc** from the accelerations it reports.
+ *
  * #### External Forces: f_ext
  * 
  * This type of driver can be used for specifying **physical** (but not artificial, i.e. not task-introduced)
@@ -289,7 +300,35 @@ namespace KDL
  *    accelerations of the end-effector. More specifically, additional torque commands will be computed under
  *    **constrained joint torques** (**ctrl_torques** in this implementation), to overcome those "disturbances".
  *
- * Nevertheless, the above-described prioritization can be changed (see [3] & [5] for more details) but those features are not implemented in KDL.
+ * Nevertheless, the above-described prioritization can be changed (see [3] & [5] for more details), via **setDriverWeights**.
+ *
+ * #### Changing the prioritization: setDriverWeights
+ *
+ * The **setDriverWeights** method accepts two **nc x 1** weight vectors, one per constraint direction (the columns
+ * of **alpha**): one for the external wrenches (**f_ext**) and one for the feed-forward joint torques (**ff_torques**).
+ * Following Eq. (3.42) of [3], **b_control = w_posture * b_posture + w_ee * b_ee**, each weight is the share of the
+ * acceleration energy that driver generates at the end-effector which is added to the constraint target, i.e. the
+ * share the constraint leaves uncompensated:
+ *
+ *  * **w = 0** (the default) -- the constraint fully compensates that driver in that direction, reproducing the
+ *    classic Popov-Vereshchagin prioritization described above.
+ *
+ *  * **w = 1** -- the driver passes through: the end-effector accelerates by the constrained setpoint plus the
+ *    acceleration that driver alone would produce. The joint accelerations then change by exactly
+ *    **M^-1 * J^T * f_ext** (or **M^-1 * ff_torques**) with respect to the same solve without the driver.
+ *
+ *  * **0 < w < 1** -- a linear blend of the two.
+ *
+ * Eq. (3.42)'s **w_ee** (the weight on the setpoint itself) is not a separate parameter: scale **beta**.
+ *
+ * Because the weights are vectors rather than scalars, this can be applied per constraint direction, e.g. compliant
+ * along a contact normal while remaining stiff in the other constrained directions.
+ *
+ * Note what **f_ext** means under a non-zero weight. The solver treats **f_ext** as a force acting on the segment.
+ * With **w = 0** that is a disturbance the constraint rejects, e.g. a measured contact force. With **w = 1** the
+ * arm's motion (and, through inverse dynamics, its joint torque) carries the full **J^T * f_ext**, which is what a
+ * controller uses to make the arm **exert** a modelled wrench on the environment. Sensed and commanded wrenches
+ * enter through the same input; the weight decides which one it is.
  *
  * ### Using the algorithm for solving forward dynamics (FD) problem
  * 
@@ -330,8 +369,10 @@ namespace KDL
  *
  * ### Supported robot models
  *
- * KDL's current implementation of the Vereshchagin HD solver supports only robot chains that have equal number of joints and segments.
- * Moreover, this implementation can only compute dynamics for **serial** type of chains, i.e. currently, **tree** robot structures are not supported
+ * Segments with a **Joint::Fixed** joint are supported: such a segment carries its pose and inertia but no degree of freedom,
+ * so a chain may have fewer joints than segments. All joint-space inputs and outputs (**q**, **q_dot**, **q_dotdot**, **ff_torques**,
+ * **constraint_torques**) are sized by the number of joints, while **f_ext** has one entry per segment.
+ * This implementation can only compute dynamics for **serial** type of chains, i.e. currently, **tree** robot structures are not supported
  * in this solver. Nevertheless, the original solver's derivation has been extended in [3] to account for multiple motion constraints imposed
  * on a **tree** robot structure. This extension does not only account for acceleration constraints imposed on multiple end-effectors but also for
  * acceleration constraints imposed on more proximal segments. However, the above-mentioned extensions are currently not implemented in this version of KDL.
@@ -363,7 +404,7 @@ namespace KDL
  * @ingroup KinematicFamily
  */
 
-class ChainHdSolver_Vereshchagin : KDL::SolverI
+class ChainHdSolver_Vereshchagin : public KDL::SolverI
 {
     typedef std::vector<Twist> Twists;
     typedef std::vector<Frame> Frames;
@@ -406,6 +447,25 @@ public:
 
     /// @copydoc KDL::SolverI::updateInternalDataStructures
     virtual void updateInternalDataStructures();
+
+    /**
+     * Set the per-driver pass-through weights used when solving for the
+     * constraint force magnitudes. Each weight is an nc-vector, one entry per
+     * column of alpha.
+     *
+     * A weight of 0.0 (the default) means the acceleration constraint fully
+     * compensates that driver, i.e. the constraint is satisfied exactly
+     * regardless of the driver -- this is the classic Popov-Vereshchagin
+     * prioritisation. A weight of 1.0 means the driver passes through: the
+     * constrained segment accelerates by the setpoint plus what that driver
+     * alone would produce. Values in between blend the two, as in Eq. (3.42)
+     * of [3], whose w_posture this is.
+     *
+     * \param w_f_ext pass-through share per constraint direction for the external wrenches
+     * \param w_ff_torques pass-through share per constraint direction for the feed-forward joint torques
+     * \return E_NOERROR on success, E_SIZE_MISMATCH if either vector is not of size nc
+     */
+    int setDriverWeights(const Eigen::VectorXd& w_f_ext, const Eigen::VectorXd& w_ff_torques);
 
     //Returns cartesian acceleration of links in base coordinates
     void getTransformedLinkAcceleration(Twists& x_dotdot);
@@ -481,6 +541,8 @@ private:
     Eigen::VectorXd total_torques; // all the contributions that are felt at the joint: constraints + nature + external forces
     Wrench qdotdot_sum;
     Frame F_total;
+    Eigen::VectorXd w_f_ext, w_ff_torques; //per-constraint-direction driver weights, see setDriverWeights
+    Matrix6Xd alpha_root; //alfa in root coordinates, torques above forces
 
     struct segment_info
     {
@@ -511,8 +573,17 @@ private:
         double totalBias; //Azamat: R+PC (centrepital+coriolis) in joint subspace
         double u; //vector u[i] = torques(i) - S[i]^T*(p_A[i] + I_A[i]*C[i]) in joint subspace. Azamat: In code u[i] = torques(i) - s[i].totalBias
 
+        //Per-driver contributions, tracked alongside the totals above so that
+        //constraint_calculation() can credit each driver only partially.
+        //Sum of the channels plus the rigid-body bias terms == the totals.
+        Wrench U_fext, R_fext, R_tilde_fext;
+        Wrench U_ff, R_ff, R_tilde_ff;
+        double u_fext, u_ff;
+        Eigen::VectorXd G_fext, G_ff;
+
         segment_info(unsigned int nc):
-            D(0),nullspaceAccComp(0),constAccComp(0),biasAccComp(0),totalBias(0),u(0)
+            D(0),nullspaceAccComp(0),constAccComp(0),biasAccComp(0),totalBias(0),u(0),
+            u_fext(0),u_ff(0)
         {
             E.resize(6, nc);
             E_tilde.resize(6, nc);
@@ -524,6 +595,10 @@ private:
             M.setZero();
             G.setZero();
             EZ.setZero();
+            G_fext.resize(nc);
+            G_ff.resize(nc);
+            G_fext.setZero();
+            G_ff.setZero();
         };
     };
 
