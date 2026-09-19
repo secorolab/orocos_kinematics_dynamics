@@ -45,7 +45,7 @@ ChainHdSolver_Vereshchagin::ChainHdSolver_Vereshchagin(const Chain& chain_, cons
     // Provide the necessary memory for storing the total torque acting on each joint
     total_torques = Eigen::VectorXd::Zero(nj);
 
-    // Zero pass-through by default: the constraint compensates both drivers, the classic solver.
+    //Zero pass-through by default: the constraint compensates both drivers, the classic solver.
     w_f_ext = Eigen::VectorXd::Zero(nc);
     w_ff_torques = Eigen::VectorXd::Zero(nc);
 }
@@ -162,8 +162,8 @@ void ChainHdSolver_Vereshchagin::initial_upwards_sweep(const JntArray &q, const 
         //external forces are taken into account through s.U.
         Wrench FextLocal = F_total.M.Inverse() * f_ext[i];
         s.U = s.v * (s.H * s.v) - FextLocal; //f_ext[i];
-        s.U_fext = -FextLocal;      // external-wrench channel
-        s.U_ff = Wrench::Zero();    // feed-forward channel is seeded at the joint, not the segment
+        s.U_fext = -FextLocal; //external-wrench channel
+        s.U_ff = Wrench::Zero(); //feed-forward channel is seeded at the joint, not the segment
     }
 
 }
@@ -254,7 +254,7 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
 
                 //per-driver channels, same recursion minus the nature terms (child.C is nature-only)
                 s.R_tilde_fext = s.U_fext + child.R_fext + (child.PZ / child.D) * child.u_fext;
-                s.R_tilde_ff   = s.U_ff   + child.R_ff   + (child.PZ / child.D) * child.u_ff;
+                s.R_tilde_ff = s.U_ff + child.R_ff + (child.PZ / child.D) * child.u_ff;
 
                 s.G_fext = child.G_fext;
                 Twist ZDu_fext = (child.Z / child.D) * child.u_fext;
@@ -286,7 +286,7 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
                 //per-driver channels: no Z/D*u accumulation term, it is the zero limit
                 //(child.Z = child.D = 0 for a fixed joint), mirroring s.G above.
                 s.R_tilde_fext = s.U_fext + child.R_fext;
-                s.R_tilde_ff   = s.U_ff   + child.R_ff;
+                s.R_tilde_ff = s.U_ff + child.R_ff;
                 s.G_fext = child.G_fext;
                 s.G_ff = child.G_ff;
             }
@@ -385,8 +385,8 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     nu_sum += beta.data;
     nu_sum -= results[0].G;
 
-    // Eq. (3.42) of [3]: the weighted share of each driver's acceleration energy is added to the
-    // target, so the constraint leaves that share uncompensated. Zero weights add nothing.
+    //Eq. (3.42) of [3]: the weighted share of each driver's acceleration energy is added to the
+    //target, so the constraint leaves that share uncompensated. Zero weights add nothing.
     nu_sum += w_f_ext.cwiseProduct(results[0].G_fext);
     nu_sum += w_ff_torques.cwiseProduct(results[0].G_ff);
 

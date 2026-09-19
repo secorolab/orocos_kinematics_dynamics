@@ -219,12 +219,12 @@ namespace KDL
  * to the **negative** of the gravitational acceleration [4]. As a consequence, every Cartesian acceleration
  * the solver reasons about internally -- including the one constrained via **alpha** / **beta**, and the one
  * returned by **getTransformedLinkAcceleration** -- is a *gravity-offset* acceleration
- * `X_dotdot' = X_dotdot - a_g`, not the acceleration one would measure in an inertial base frame.
+ * **X_dotdot' = X_dotdot - a_g**, not the acceleration one would measure in an inertial base frame.
  *
  * In practice this means that to constrain the end-effector's **true** base-frame acceleration to some
- * `X_dotdot_desired`, the caller must supply `beta = alpha^T * (X_dotdot_desired - a_g)`, which with the sign
- * convention above is `beta = alpha^T * X_dotdot_desired + alpha^T * root_acc`. In particular, to hold the
- * end-effector **still** under gravity, `beta = alpha^T * root_acc`, **not** `beta = 0`: passing zero commands
+ * **X_dotdot_desired**, the caller must supply **beta = alpha^T * (X_dotdot_desired - a_g)**, which with the sign
+ * convention above is **beta = alpha^T * X_dotdot_desired + alpha^T * root_acc**. In particular, to hold the
+ * end-effector **still** under gravity, **beta = alpha^T * root_acc**, **not** **beta = 0**: passing zero commands
  * free-fall, since it asks for zero gravity-offset acceleration rather than zero true acceleration.
  *
  * #### External Forces: f_ext
@@ -322,7 +322,7 @@ namespace KDL
  *
  *  * **0 < w < 1** -- a linear blend of the two.
  *
- * The thesis's **w_ee** (the weight on the setpoint itself) is not a separate parameter: scale **beta**.
+ * Eq. (3.42)'s **w_ee** (the weight on the setpoint itself) is not a separate parameter: scale **beta**.
  *
  * Because the weights are vectors rather than scalars, this can be applied per constraint direction, e.g. compliant
  * along a contact normal while remaining stiff in the other constrained directions.
@@ -573,9 +573,9 @@ private:
         double totalBias; //Azamat: R+PC (centrepital+coriolis) in joint subspace
         double u; //vector u[i] = torques(i) - S[i]^T*(p_A[i] + I_A[i]*C[i]) in joint subspace. Azamat: In code u[i] = torques(i) - s[i].totalBias
 
-        // Per-driver contributions, tracked alongside the totals above so that
-        // constraint_calculation() can credit each driver only partially.
-        // Sum of the channels plus the rigid-body bias terms == the totals.
+        //Per-driver contributions, tracked alongside the totals above so that
+        //constraint_calculation() can credit each driver only partially.
+        //Sum of the channels plus the rigid-body bias terms == the totals.
         Wrench U_fext, R_fext, R_tilde_fext;
         Wrench U_ff, R_ff, R_tilde_ff;
         double u_fext, u_ff;

@@ -548,17 +548,15 @@ void init_kinfam(pybind11::module &m)
     chain_hd_solver_vereshchagin.def("setDriverWeights", &ChainHdSolver_Vereshchagin::setDriverWeights,
                                      py::arg("w_f_ext"), py::arg("w_ff_torques"));
     // Vector out-parameters cross the binding as copies, so these return the result instead.
-    chain_hd_solver_vereshchagin.def("getTransformedLinkAcceleration",
-                                     [](ChainHdSolver_Vereshchagin& self, std::vector<Twist> x_dotdot) {
-                                         self.getTransformedLinkAcceleration(x_dotdot);
-                                         return x_dotdot;
-                                     },
-                                     py::arg("x_dotdot"));
+    chain_hd_solver_vereshchagin.def("getTransformedLinkAcceleration", [](ChainHdSolver_Vereshchagin &self, std::vector<Twist> x_dotdot)
+    {
+        self.getTransformedLinkAcceleration(x_dotdot);
+        return x_dotdot;
+    }, py::arg("x_dotdot"));
     chain_hd_solver_vereshchagin.def("getTotalTorque", &ChainHdSolver_Vereshchagin::getTotalTorque, py::arg("total_tau"));
-    chain_hd_solver_vereshchagin.def("getContraintForceMagnitude",
-                                     [](ChainHdSolver_Vereshchagin& self, Eigen::VectorXd nu) {
-                                         self.getContraintForceMagnitude(nu);
-                                         return nu;
-                                     },
-                                     py::arg("nu"));
+    chain_hd_solver_vereshchagin.def("getContraintForceMagnitude", [](ChainHdSolver_Vereshchagin &self, Eigen::VectorXd nu)
+    {
+        self.getContraintForceMagnitude(nu);
+        return nu;
+    }, py::arg("nu"));
 }

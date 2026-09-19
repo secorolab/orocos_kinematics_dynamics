@@ -1233,8 +1233,8 @@ void SolverTest::VereshchaginFixedJointTest()
 
     for (unsigned int i = 0; i < 3; i++)
     {
-        CPPUNIT_ASSERT(qddB(i) == qddB(i)); // not NaN
-        CPPUNIT_ASSERT(ctB(i) == ctB(i)); // not NaN
+        CPPUNIT_ASSERT(!std::isnan(qddB(i)));
+        CPPUNIT_ASSERT(!std::isnan(ctB(i)));
         CPPUNIT_ASSERT(Equal(qddA(i), qddB(i), eps));
         CPPUNIT_ASSERT(Equal(ctA(i), ctB(i), eps));
     }
@@ -1391,18 +1391,18 @@ void SolverTest::VereshchaginDriverWeightingTest()
 }
 
 // Acceleration energy of acc along one alpha column (force in vel, torque in rot).
-static double constraintEnergy(const Twist &unit_force, const Twist &acc)
+double SolverTest::constraintEnergy(const Twist &unit_force, const Twist &acc)
 {
     return dot(unit_force.vel, acc.vel) + dot(unit_force.rot, acc.rot);
 }
 
 // Change in joint acceleration and in end-effector acceleration that adding f_ext causes,
 // for a solver whose f_ext pass-through weight is w in every constrained direction.
-static void vereshchaginWrenchResponse(const Chain &chain, unsigned int nc, double w,
-                                       const JntArray &q, const JntArray &qd, const Jacobian &alpha,
-                                       const JntArray &beta, const JntArray &ff,
-                                       const Wrenches &f_zero, const Wrenches &f,
-                                       Eigen::VectorXd &dqdd, Twist &dacc)
+void SolverTest::vereshchaginWrenchResponse(const Chain &chain, unsigned int nc, double w,
+                                            const JntArray &q, const JntArray &qd, const Jacobian &alpha,
+                                            const JntArray &beta, const JntArray &ff,
+                                            const Wrenches &f_zero, const Wrenches &f,
+                                            Eigen::VectorXd &dqdd, Twist &dacc)
 {
     ChainHdSolver_Vereshchagin solver(chain, Twist(Vector(0.0, 0.0, 9.81), Vector::Zero()), nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
@@ -1427,7 +1427,7 @@ void SolverTest::VereshchaginDriverPassThroughTest()
     // at w = 0 the constrained end-effector directions see no change at all; at w = 0.5 the
     // joint response is the mean of the two. Gravity, joint velocity, feed-forward torque and a
     // fixed tool segment are all on, so the identity has to hold through the natural dynamics.
-    const double eps = 1e-9;
+    double eps = 1.e-9;
 
     RigidBodyInertia link(2.0, Vector(0.0, 0.0, 0.2), RotationalInertia(0.02666667, 0.02666667, 1e-4));
     Chain chain;
@@ -1469,13 +1469,13 @@ void SolverTest::VereshchaginDriverPassThroughTest()
 
     for (unsigned int i = 0; i < nj; i++)
     {
-        CPPUNIT_ASSERT_DOUBLES_EQUAL(freeResponse(i), dqddFull(i), eps);
-        CPPUNIT_ASSERT_DOUBLES_EQUAL(0.5 * (dqddFull(i) + dqddNone(i)), dqddHalf(i), eps);
+        CPPUNIT_ASSERT(Equal(freeResponse(i), dqddFull(i), eps));
+        CPPUNIT_ASSERT(Equal(0.5 * (dqddFull(i) + dqddNone(i)), dqddHalf(i), eps));
     }
     // w = 0: the constrained directions of the end-effector are untouched by the wrench, and the
     // wrench does move the arm somewhere, or the test proves nothing.
     for (unsigned int c = 0; c < nc; c++)
-        CPPUNIT_ASSERT_DOUBLES_EQUAL(0.0, constraintEnergy(alpha.getColumn(c), daccNone), eps);
+        CPPUNIT_ASSERT(Equal(constraintEnergy(alpha.getColumn(c), daccNone), 0.0, eps));
     CPPUNIT_ASSERT(dqddNone.norm() > 1e-3);
     // w = 1: the wrench does reach the constrained directions.
     CPPUNIT_ASSERT(std::fabs(constraintEnergy(alpha.getColumn(0), daccFull)) > 1e-3);
