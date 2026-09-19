@@ -539,7 +539,7 @@ void init_kinfam(pybind11::module &m)
     // ------------------------------
     // ChainHdSolver_Vereshchagin
     // ------------------------------
-    py::class_<ChainHdSolver_Vereshchagin> chain_hd_solver_vereshchagin(m, "ChainHdSolver_Vereshchagin");
+    py::class_<ChainHdSolver_Vereshchagin, SolverI> chain_hd_solver_vereshchagin(m, "ChainHdSolver_Vereshchagin");
     chain_hd_solver_vereshchagin.def(py::init<const Chain&, const Twist&, const unsigned int>(),
                                      py::arg("chain"), py::arg("root_acc"), py::arg("nc"));
     chain_hd_solver_vereshchagin.def("CartToJnt", &ChainHdSolver_Vereshchagin::CartToJnt,

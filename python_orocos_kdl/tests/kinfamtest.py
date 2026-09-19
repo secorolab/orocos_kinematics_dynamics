@@ -199,8 +199,11 @@ class KinfamTestFunctions(unittest.TestCase):
         fight_without = constraint_torques([0.0] * nc, f_zero)
         self.assertTrue(any(abs(a - b) > 1e-6 for a, b in zip(fight_with, fight_without)))
 
-        self.assertNotEqual(solver.setDriverWeights([0.0] * (nc + 1), [0.0] * nc), 0)
-        self.assertNotEqual(solver.setDriverWeights([0.0] * nc, [0.0] * (nc + 1)), 0)
+        size_mismatch = solver.setDriverWeights([0.0] * (nc + 1), [0.0] * nc)
+        self.assertNotEqual(size_mismatch, 0)
+        self.assertEqual(solver.getError(), size_mismatch)
+        self.assertEqual(solver.strError(size_mismatch), "The size of the input does not match the internal state")
+        self.assertEqual(solver.setDriverWeights([0.0] * nc, [0.0] * (nc + 1)), size_mismatch)
         total = JntArray(n)
         solver.getTotalTorque(total)
         self.assertTrue(all(math.isfinite(total[i]) for i in range(n)))
