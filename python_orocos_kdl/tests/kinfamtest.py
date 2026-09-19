@@ -25,6 +25,7 @@
 from builtins import range
 
 import gc
+import math
 import psutil
 from PyKDL import *
 import random
@@ -199,6 +200,10 @@ class KinfamTestFunctions(unittest.TestCase):
         self.assertTrue(any(abs(a - b) > 1e-6 for a, b in zip(fight_with, fight_without)))
 
         self.assertNotEqual(solver.setDriverWeights([0.0] * (nc + 1), [0.0] * nc), 0)
+        self.assertNotEqual(solver.setDriverWeights([0.0] * nc, [0.0] * (nc + 1)), 0)
+        total = JntArray(n)
+        solver.getTotalTorque(total)
+        self.assertTrue(all(math.isfinite(total[i]) for i in range(n)))
         nu = solver.getContraintForceMagnitude([0.0] * nc)
         self.assertEqual(len(nu), nc)
         acc = solver.getTransformedLinkAcceleration([Twist.Zero() for _ in range(ns + 1)])

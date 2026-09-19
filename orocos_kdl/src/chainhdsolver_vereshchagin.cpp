@@ -55,8 +55,6 @@ void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
     nj = chain.getNrOfJoints();
     total_torques = Eigen::VectorXd::Zero(nj);
     results.resize(ns+1,segment_info(nc));
-    w_f_ext = Eigen::VectorXd::Zero(nc);
-    w_ff_torques = Eigen::VectorXd::Zero(nc);
 }
 
 int ChainHdSolver_Vereshchagin::setDriverWeights(const Eigen::VectorXd& w_f_ext_, const Eigen::VectorXd& w_ff_torques_)

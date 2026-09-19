@@ -83,10 +83,10 @@ private:
     void FkVelAndIkVelLocal(Chain& chain, ChainFkSolverVel& fksolvervel, ChainIkSolverVel& iksolvervel);
     void FkPosAndIkPosLocal(Chain& chain,ChainFkSolverPos& fksolverpos, ChainIkSolverPos& iksolverpos);
     static double constraintEnergy(const Twist &unit_force, const Twist &acc);
-    static void vereshchaginWrenchResponse(const Chain &chain, unsigned int nc, double w,
+    static void vereshchaginDriverResponse(const Chain &chain, unsigned int nc, double w_fext, double w_ff,
                                            const JntArray &q, const JntArray &qd, const Jacobian &alpha,
-                                           const JntArray &beta, const JntArray &ff,
-                                           const Wrenches &f_zero, const Wrenches &f,
+                                           const JntArray &beta, const JntArray &ff0, const JntArray &ff1,
+                                           const Wrenches &f0, const Wrenches &f1,
                                            Eigen::VectorXd &dqdd, Twist &dacc);
 
 };

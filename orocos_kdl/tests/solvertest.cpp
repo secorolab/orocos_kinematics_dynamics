@@ -1378,6 +1378,8 @@ void SolverTest::VereshchaginDriverWeightingTest()
     Eigen::VectorXd badSize = Eigen::VectorXd::Ones(nc + 1);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_SIZE_MISMATCH,
         solverSize.setDriverWeights(badSize, Eigen::VectorXd::Zero(nc)));
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_SIZE_MISMATCH,
+        solverSize.setDriverWeights(Eigen::VectorXd::Zero(nc), badSize));
 
     JntArray qddPost(nj), ctPost(nj);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
@@ -1396,23 +1398,24 @@ double SolverTest::constraintEnergy(const Twist &unit_force, const Twist &acc)
     return dot(unit_force.vel, acc.vel) + dot(unit_force.rot, acc.rot);
 }
 
-// Change in joint acceleration and in end-effector acceleration that adding f_ext causes,
-// for a solver whose f_ext pass-through weight is w in every constrained direction.
-void SolverTest::vereshchaginWrenchResponse(const Chain &chain, unsigned int nc, double w,
+// Change in joint acceleration and in end-effector acceleration between two solves that differ
+// only in their drivers, (f0, ff0) and (f1, ff1), with the given pass-through weights in every
+// constrained direction.
+void SolverTest::vereshchaginDriverResponse(const Chain &chain, unsigned int nc, double w_fext, double w_ff,
                                             const JntArray &q, const JntArray &qd, const Jacobian &alpha,
-                                            const JntArray &beta, const JntArray &ff,
-                                            const Wrenches &f_zero, const Wrenches &f,
+                                            const JntArray &beta, const JntArray &ff0, const JntArray &ff1,
+                                            const Wrenches &f0, const Wrenches &f1,
                                             Eigen::VectorXd &dqdd, Twist &dacc)
 {
     ChainHdSolver_Vereshchagin solver(chain, Twist(Vector(0.0, 0.0, 9.81), Vector::Zero()), nc);
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR,
-        solver.setDriverWeights(Eigen::VectorXd::Constant(nc, w), Eigen::VectorXd::Zero(nc)));
+        solver.setDriverWeights(Eigen::VectorXd::Constant(nc, w_fext), Eigen::VectorXd::Constant(nc, w_ff)));
     const unsigned int nj = chain.getNrOfJoints();
     JntArray qdd0(nj), qdd1(nj), ct(nj);
     std::vector<Twist> acc0(chain.getNrOfSegments() + 1), acc1(chain.getNrOfSegments() + 1);
-    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, solver.CartToJnt(q, qd, qdd0, alpha, beta, f_zero, ff, ct));
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, solver.CartToJnt(q, qd, qdd0, alpha, beta, f0, ff0, ct));
     solver.getTransformedLinkAcceleration(acc0);
-    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, solver.CartToJnt(q, qd, qdd1, alpha, beta, f, ff, ct));
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, solver.CartToJnt(q, qd, qdd1, alpha, beta, f1, ff1, ct));
     solver.getTransformedLinkAcceleration(acc1);
     dqdd = qdd1.data - qdd0.data;
     dacc = acc1.back() - acc0.back();
@@ -1422,11 +1425,12 @@ void SolverTest::VereshchaginDriverPassThroughTest()
 {
     std::cout << "KDL Vereshchagin Driver Pass-Through Test" << std::endl;
 
-    // The identity behind setDriverWeights: at w = 1 the constraint leaves f_ext uncompensated, so
-    // the wrench changes the joint accelerations by exactly the arm's free response M^-1 J^T f;
-    // at w = 0 the constrained end-effector directions see no change at all; at w = 0.5 the
-    // joint response is the mean of the two. Gravity, joint velocity, feed-forward torque and a
-    // fixed tool segment are all on, so the identity has to hold through the natural dynamics.
+    // The identity behind setDriverWeights, for each driver in turn: at w = 1 the constraint leaves
+    // the driver uncompensated, so it changes the joint accelerations by exactly the arm's free
+    // response, M^-1 J^T f for the wrench and M^-1 tau for the feed-forward torque; at w = 0 the
+    // constrained end-effector directions see no change at all; at w = 0.5 the joint response is
+    // the mean of the two. Gravity, joint velocity, the other driver and a fixed tool segment are
+    // all on, so the identity has to hold through the natural dynamics.
     double eps = 1.e-9;
 
     RigidBodyInertia link(2.0, Vector(0.0, 0.0, 0.2), RotationalInertia(0.02666667, 0.02666667, 1e-4));
@@ -1443,7 +1447,7 @@ void SolverTest::VereshchaginDriverPassThroughTest()
     Jacobian alpha(nc);
     alpha.setColumn(0, Twist(Vector(1.0, 0.0, 0.0), Vector::Zero()));
     alpha.setColumn(1, Twist(Vector::Zero(), Vector(0.0, 1.0, 0.0)));
-    JntArray q(nj), qd(nj), ff(nj), beta(nc);
+    JntArray q(nj), qd(nj), ff_zero(nj), ff(nj), beta(nc);
     q(0) = 0.3;  q(1) = -0.6; q(2) = 0.4;
     qd(0) = 0.5; qd(1) = -0.2; qd(2) = 0.8;
     ff(0) = 1.0; ff(1) = -0.5; ff(2) = 0.25;
@@ -1459,17 +1463,19 @@ void SolverTest::VereshchaginDriverPassThroughTest()
     CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, jacobianSolver.JntToJac(q, jacobian));
     Eigen::Matrix<double, 6, 1> wrench;
     wrench << f.back()(0), f.back()(1), f.back()(2), f.back()(3), f.back()(4), f.back()(5);
-    const Eigen::VectorXd freeResponse = mass.data.ldlt().solve(jacobian.data.transpose() * wrench);
+    const Eigen::VectorXd freeWrenchResponse = mass.data.ldlt().solve(jacobian.data.transpose() * wrench);
+    const Eigen::VectorXd freeTorqueResponse = mass.data.ldlt().solve(ff.data);
 
+    // External wrench: the feed-forward torque stays on in both solves.
     Eigen::VectorXd dqddFull, dqddHalf, dqddNone;
     Twist daccFull, daccHalf, daccNone;
-    vereshchaginWrenchResponse(chain, nc, 1.0, q, qd, alpha, beta, ff, f_zero, f, dqddFull, daccFull);
-    vereshchaginWrenchResponse(chain, nc, 0.5, q, qd, alpha, beta, ff, f_zero, f, dqddHalf, daccHalf);
-    vereshchaginWrenchResponse(chain, nc, 0.0, q, qd, alpha, beta, ff, f_zero, f, dqddNone, daccNone);
+    vereshchaginDriverResponse(chain, nc, 1.0, 0.0, q, qd, alpha, beta, ff, ff, f_zero, f, dqddFull, daccFull);
+    vereshchaginDriverResponse(chain, nc, 0.5, 0.0, q, qd, alpha, beta, ff, ff, f_zero, f, dqddHalf, daccHalf);
+    vereshchaginDriverResponse(chain, nc, 0.0, 0.0, q, qd, alpha, beta, ff, ff, f_zero, f, dqddNone, daccNone);
 
     for (unsigned int i = 0; i < nj; i++)
     {
-        CPPUNIT_ASSERT(Equal(freeResponse(i), dqddFull(i), eps));
+        CPPUNIT_ASSERT(Equal(freeWrenchResponse(i), dqddFull(i), eps));
         CPPUNIT_ASSERT(Equal(0.5 * (dqddFull(i) + dqddNone(i)), dqddHalf(i), eps));
     }
     // w = 0: the constrained directions of the end-effector are untouched by the wrench, and the
@@ -1478,6 +1484,21 @@ void SolverTest::VereshchaginDriverPassThroughTest()
         CPPUNIT_ASSERT(Equal(constraintEnergy(alpha.getColumn(c), daccNone), 0.0, eps));
     CPPUNIT_ASSERT(dqddNone.norm() > 1e-3);
     // w = 1: the wrench does reach the constrained directions.
+    CPPUNIT_ASSERT(std::fabs(constraintEnergy(alpha.getColumn(0), daccFull)) > 1e-3);
+
+    // Feed-forward torque: the wrench stays on in both solves.
+    vereshchaginDriverResponse(chain, nc, 0.0, 1.0, q, qd, alpha, beta, ff_zero, ff, f, f, dqddFull, daccFull);
+    vereshchaginDriverResponse(chain, nc, 0.0, 0.5, q, qd, alpha, beta, ff_zero, ff, f, f, dqddHalf, daccHalf);
+    vereshchaginDriverResponse(chain, nc, 0.0, 0.0, q, qd, alpha, beta, ff_zero, ff, f, f, dqddNone, daccNone);
+
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        CPPUNIT_ASSERT(Equal(freeTorqueResponse(i), dqddFull(i), eps));
+        CPPUNIT_ASSERT(Equal(0.5 * (dqddFull(i) + dqddNone(i)), dqddHalf(i), eps));
+    }
+    for (unsigned int c = 0; c < nc; c++)
+        CPPUNIT_ASSERT(Equal(constraintEnergy(alpha.getColumn(c), daccNone), 0.0, eps));
+    CPPUNIT_ASSERT(dqddNone.norm() > 1e-3);
     CPPUNIT_ASSERT(std::fabs(constraintEnergy(alpha.getColumn(0), daccFull)) > 1e-3);
 }
 

@@ -372,8 +372,10 @@ namespace KDL
  *
  * ### Supported robot models
  *
- * KDL's current implementation of the Vereshchagin HD solver supports only robot chains that have equal number of joints and segments.
- * Moreover, this implementation can only compute dynamics for **serial** type of chains, i.e. currently, **tree** robot structures are not supported
+ * Segments with a **Joint::Fixed** joint are supported: such a segment carries its pose and inertia but no degree of freedom,
+ * so a chain may have fewer joints than segments. All joint-space inputs and outputs (**q**, **q_dot**, **q_dotdot**, **ff_torques**,
+ * **constraint_torques**) are sized by the number of joints, while **f_ext** has one entry per segment.
+ * This implementation can only compute dynamics for **serial** type of chains, i.e. currently, **tree** robot structures are not supported
  * in this solver. Nevertheless, the original solver's derivation has been extended in [3] to account for multiple motion constraints imposed
  * on a **tree** robot structure. This extension does not only account for acceleration constraints imposed on multiple end-effectors but also for
  * acceleration constraints imposed on more proximal segments. However, the above-mentioned extensions are currently not implemented in this version of KDL.
