@@ -449,6 +449,58 @@ public:
     virtual void updateInternalDataStructures();
 
     /**
+     * Treat the chain's root as a free-floating base body (e.g. a spacecraft bus
+     * carrying the arm) instead of a body with prescribed acceleration.
+     *
+     * The root acceleration is then solved together with the constraint force
+     * magnitudes, from the root's force balance (Featherstone, Rigid Body Dynamics
+     * Algorithms, Sec. 9.4, Eq. 9.17) extended by the constraint rows, rather than
+     * taken from root_acc. The end-effector constraint wrench is realised through
+     * the joints, so its reaction acts on the base: no external force is assumed,
+     * which is what makes the solution realisable by joint torques alone.
+     *
+     * root_acc from the constructor still acts as a uniform field (as gravity in the
+     * fixed-base case); pass zero for a free-falling system such as one in orbit.
+     *
+     * \param inertia rigid-body inertia of the base, in root coordinates
+     * \param twist the base's twist, in root coordinates with the root origin as
+     *        reference point
+     */
+    void setFloatingBase(const RigidBodyInertia& inertia, const Twist& twist);
+
+    /// Return to the default fixed (prescribed-acceleration) root.
+    void setFixedBase();
+
+    /// True root spatial acceleration (root coordinates) from the last CartToJnt: solved when floating, zero when fixed.
+    void getRootAcceleration(Twist& root_acceleration) const;
+
+    /**
+     * Solve the constraint force magnitudes by proximal (augmented-Lagrangian)
+     * iterations instead of the truncated SVD of M0 (disabled by default).
+     *
+     * Each iteration solves (M0'M0 + mu I) nu_{k+1} = M0'r + mu nu_k, the proximal-point
+     * step on the least-squares form of the constraint balance M0 nu = r, in the spirit of
+     * the proximal constrained dynamics of J. Carpentier, R. Budhiraja, N. Mansard,
+     * "Proximal and sparse resolution of constrained dynamic equations", RSS 2021, and of
+     * A. S. Sathya, J. Carpentier, "Constrained Articulated Body Dynamics Algorithms"
+     * (Pinocchio's pv.hpp and ProximalSettings). For
+     * well-posed constraints it converges to the same nu as the SVD; for redundant ones,
+     * even with disagreeing setpoints, to the least-squares nu of minimum norm, with
+     * near-singular directions damped by mu instead of cut off. With a floating base the
+     * same scheme acts on the whole system, regularising the nu block.
+     *
+     * \param enable use the proximal solve (true) or the truncated SVD (false)
+     * \param mu proximal weight, in the units of M0'M0's entries
+     * \param max_iterations iteration cap
+     * \param tolerance stop once ||nu_{k+1} - nu_k|| <= tolerance (1 + ||nu||)
+     */
+    void setProximalSolver(bool enable, double mu = 1e-6, unsigned int max_iterations = 10,
+                           double tolerance = 1e-12);
+
+    /// Proximal iterations used in the last CartToJnt (0 when the proximal solve is disabled).
+    unsigned int getProximalIterations() const { return proximal_iterations; }
+
+    /**
      * Set the per-driver pass-through weights used when solving for the
      * constraint force magnitudes. Each weight is an nc-vector, one entry per
      * column of alpha.
@@ -521,6 +573,15 @@ private:
      *
      */
     void final_upwards_sweep(JntArray &q_dotdot, JntArray &constraint_torques);
+    /**
+     *  Floating base: solves the root acceleration and the constraint force magnitudes
+     *  together, see setFloatingBase.
+     */
+    void floating_base_calculation(const JntArray& beta);
+    /**
+     *  Proximal-point solve of A x = b, regularising the unknowns from index `first` on.
+     */
+    Eigen::VectorXd proximal_solve(const Eigen::MatrixXd& A, const Eigen::VectorXd& b, unsigned int first);
 
 private:
     const Chain& chain;
@@ -543,6 +604,17 @@ private:
     Frame F_total;
     Eigen::VectorXd w_f_ext, w_ff_torques; //per-constraint-direction driver weights, see setDriverWeights
     Matrix6Xd alpha_root; //alfa in root coordinates, torques above forces
+
+    bool floating_base;
+    RigidBodyInertia base_inertia; //floating base, root coordinates
+    Twist base_twist; //floating base, root coordinates, root origin as reference point
+    Twist acc_root_used; //root acceleration propagated in the final sweep
+
+    bool proximal;
+    double proximal_mu;
+    unsigned int proximal_max_iterations;
+    double proximal_tolerance;
+    unsigned int proximal_iterations;
 
     struct segment_info
     {
