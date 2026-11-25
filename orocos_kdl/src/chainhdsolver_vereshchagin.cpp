@@ -22,6 +22,9 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "chainhdsolver_vereshchagin.hpp"
+#include <Eigen/Geometry>
+#include <Eigen/LU>
+#include <Eigen/QR>
 #include "frames_io.hpp"
 #include "utilities/svd_eigen_HH.hpp"
 
@@ -48,6 +51,76 @@ ChainHdSolver_Vereshchagin::ChainHdSolver_Vereshchagin(const Chain& chain_, cons
     //Zero pass-through by default: the constraint compensates both drivers, the classic solver.
     w_f_ext = Eigen::VectorXd::Zero(nc);
     w_ff_torques = Eigen::VectorXd::Zero(nc);
+
+    floating_base = false;
+    base_inertia = RigidBodyInertia::Zero();
+    base_twist = Twist::Zero();
+    acc_root_used = acc_root;
+
+    proximal = false;
+    proximal_mu = 1e-6;
+    proximal_max_iterations = 10;
+    proximal_tolerance = 1e-12;
+    proximal_iterations = 0;
+}
+
+void ChainHdSolver_Vereshchagin::setProximalSolver(bool enable, double mu, unsigned int max_iterations,
+                                                   double tolerance)
+{
+    proximal = enable;
+    proximal_mu = mu;
+    proximal_max_iterations = max_iterations;
+    proximal_tolerance = tolerance;
+}
+
+Eigen::VectorXd ChainHdSolver_Vereshchagin::proximal_solve(const Eigen::MatrixXd& A, const Eigen::VectorXd& b,
+                                                           unsigned int first)
+{
+    //Proximal-point iterations on the least-squares form of A x = b, regularising the
+    //unknowns from index `first` on (S selects them):
+    //    (A'A + mu S) x_{k+1} = A'b + mu S x_k.
+    //A'A x = A'b always has a solution, so the iterates converge to the least-squares
+    //solution with minimum-norm constraint magnitudes, even for redundant constraints
+    //whose setpoints disagree; on A x = b itself they would drift without bound there.
+    const Eigen::Index n = A.rows();
+    Eigen::MatrixXd normal = A.transpose() * A;
+    normal.diagonal().tail(n - first).array() += proximal_mu;
+    const Eigen::VectorXd Atb = A.transpose() * b;
+    const Eigen::LDLT<Eigen::MatrixXd> ldlt(normal);
+    Eigen::VectorXd x = Eigen::VectorXd::Zero(n);
+    proximal_iterations = 0;
+    while (proximal_iterations < proximal_max_iterations)
+    {
+        Eigen::VectorXd rhs = Atb;
+        rhs.tail(n - first) += proximal_mu * x.tail(n - first);
+        const Eigen::VectorXd next = ldlt.solve(rhs);
+        const double step = (next.tail(n - first) - x.tail(n - first)).norm();
+        x = next;
+        proximal_iterations++;
+        if (step <= proximal_tolerance * (1.0 + x.tail(n - first).norm()))
+            break;
+    }
+    return x;
+}
+
+void ChainHdSolver_Vereshchagin::setFloatingBase(const RigidBodyInertia& inertia, const Twist& twist)
+{
+    floating_base = true;
+    base_inertia = inertia;
+    base_twist = twist;
+}
+
+void ChainHdSolver_Vereshchagin::setFixedBase()
+{
+    floating_base = false;
+    base_inertia = RigidBodyInertia::Zero();
+    base_twist = Twist::Zero();
+}
+
+void ChainHdSolver_Vereshchagin::getRootAcceleration(Twist& root_acceleration) const
+{
+    //acc_root is a fictitious uniform field (minus gravity) in both modes; remove it.
+    root_acceleration = floating_base ? acc_root_used - acc_root : Twist::Zero();
 }
 
 void ChainHdSolver_Vereshchagin::updateInternalDataStructures() {
@@ -94,6 +167,13 @@ void ChainHdSolver_Vereshchagin::initial_upwards_sweep(const JntArray &q, const 
 
     unsigned int j = 0;
     F_total = Frame::Identity();
+    //The root as a body of its own: inert and at rest unless it is a floating base.
+    segment_info& root = results[0];
+    root.v = floating_base ? base_twist : Twist::Zero();
+    root.H = floating_base ? ArticulatedBodyInertia(base_inertia) : ArticulatedBodyInertia();
+    root.U = floating_base ? root.v * (root.H * root.v) : Wrench::Zero();
+    root.U_fext = Wrench::Zero();
+    root.U_ff = Wrench::Zero();
     for (unsigned int i = 0; i < ns; i++)
     {
         //Express everything in the segments reference frame (body coordinates)
@@ -144,7 +224,7 @@ void ChainHdSolver_Vereshchagin::initial_upwards_sweep(const JntArray &q, const 
         }
         else
         {
-            s.v = vj;
+            s.v = s.F.Inverse(results[0].v) + vj;
             s.A = s.F.M.Inverse(acc_root);
         }
         //c[i] = cj + v[i]xvj (remark: cj=0, since our S is not time dependent in local coordinates)
@@ -356,6 +436,34 @@ void ChainHdSolver_Vereshchagin::downwards_sweep(const Jacobian& alfa, const Jnt
 
 void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
 {
+    if (floating_base)
+    {
+        floating_base_calculation(beta);
+        return;
+    }
+    acc_root_used = acc_root;
+    Vector6d acc;
+    acc << Eigen::Vector3d::Map(acc_root.rot.data), Eigen::Vector3d::Map(acc_root.vel.data);
+    nu_sum.noalias() = -(results[0].E_tilde.transpose() * acc);
+    //nu_sum.setZero();
+    nu_sum += beta.data;
+    //beta is the true acceleration energy; the recursion runs on accelerations offset by the
+    //root's, so the setpoint is offset the same way before it enters the balance.
+    nu_sum.noalias() += alpha_root.transpose() * acc;
+    nu_sum -= results[0].G;
+
+    //Eq. (3.42) of [3]: the weighted share of each driver's acceleration energy is added to the
+    //target, so the constraint leaves that share uncompensated. Zero weights add nothing.
+    nu_sum += w_f_ext.cwiseProduct(results[0].G_fext);
+    nu_sum += w_ff_torques.cwiseProduct(results[0].G_ff);
+
+    if (proximal)
+    {
+        nu = proximal_solve(results[0].M, nu_sum, 0);
+        return;
+    }
+    proximal_iterations = 0;
+
     //equation f) nu = M_0_inverse*(beta_N - E0_tilde`*acc0 - G0)
     //M_0_inverse, always nc*nc symmetric matrix
     //std::cout<<"M0: "<<results[0].M<<std::endl;
@@ -378,23 +486,67 @@ void ChainHdSolver_Vereshchagin::constraint_calculation(const JntArray& beta)
     M_0_inverse.noalias() = results[0].M * Um.transpose();
     //results[0].M.ldlt().solve(Eigen::MatrixXd::Identity(nc,nc),&M_0_inverse);
     //results[0].M.computeInverse(&M_0_inverse);
-    Vector6d acc;
-    acc << Eigen::Vector3d::Map(acc_root.rot.data), Eigen::Vector3d::Map(acc_root.vel.data);
-    nu_sum.noalias() = -(results[0].E_tilde.transpose() * acc);
-    //nu_sum.setZero();
-    nu_sum += beta.data;
-    //beta is the true acceleration energy; the recursion runs on accelerations offset by the
-    //root's, so the setpoint is offset the same way before it enters the balance.
-    nu_sum.noalias() += alpha_root.transpose() * acc;
-    nu_sum -= results[0].G;
-
-    //Eq. (3.42) of [3]: the weighted share of each driver's acceleration energy is added to the
-    //target, so the constraint leaves that share uncompensated. Zero weights add nothing.
-    nu_sum += w_f_ext.cwiseProduct(results[0].G_fext);
-    nu_sum += w_ff_torques.cwiseProduct(results[0].G_ff);
 
     //equation f) nu = M_0_inverse*(beta_N - E0_tilde`*acc0 - G0)
     nu.noalias() = M_0_inverse * nu_sum;
+}
+
+void ChainHdSolver_Vereshchagin::floating_base_calculation(const JntArray& beta)
+{
+    //Unknowns x = [a0; nu], a0 the root acceleration ([rot; vel], root coordinates).
+    //Force balance of the free root (Featherstone Eq. 9.17), with the reaction of the
+    //joint-realised constraint wrench acting on it:
+    //    P0 a0 + R0 + (E0 - T alpha) nu = 0
+    //and the constraint rows of the fixed-base case with a0 no longer given:
+    //    (E0 - alpha_root)' a0 + M0 nu = beta - G0 (+ driver pass-through)
+    //Rows are [torque; force], columns of a0 [rot; vel], as elsewhere in this solver.
+    const segment_info& root = results[0];
+    Matrix6d P0;
+    for (unsigned int k = 0; k < 6; k++)
+    {
+        Twist unit = Twist::Zero();
+        if (k < 3)
+            unit.rot(k) = 1.0;
+        else
+            unit.vel(k - 3) = 1.0;
+        const Wrench w = root.P_tilde * unit;
+        P0.col(k) << Eigen::Vector3d::Map(w.torque.data), Eigen::Vector3d::Map(w.force.data);
+    }
+    Vector6d R0;
+    R0 << Eigen::Vector3d::Map(root.R_tilde.torque.data), Eigen::Vector3d::Map(root.R_tilde.force.data);
+
+    //alpha_root holds the unit constraint wrenches at the end-effector (root axes);
+    //their reaction acts on the base, moved to the root origin.
+    const Eigen::Vector3d p_ee = Eigen::Vector3d::Map(F_total.p.data);
+    Matrix6Xd reaction(6, nc);
+    for (unsigned int c = 0; c < nc; c++)
+    {
+        const Eigen::Vector3d torque = alpha_root.block<3, 1>(0, c);
+        const Eigen::Vector3d force = alpha_root.block<3, 1>(3, c);
+        reaction.col(c) << torque + p_ee.cross(force), force;
+    }
+
+    Eigen::MatrixXd A(6 + nc, 6 + nc);
+    Eigen::VectorXd b(6 + nc);
+    A.topLeftCorner(6, 6) = P0;
+    A.topRightCorner(6, nc) = root.E_tilde - reaction;
+    A.bottomLeftCorner(nc, 6) = (root.E_tilde - alpha_root).transpose();
+    A.bottomRightCorner(nc, nc) = root.M;
+    b.head(6) = -R0;
+    b.tail(nc) = beta.data - root.G;
+    b.tail(nc) += w_f_ext.cwiseProduct(root.G_fext);
+    b.tail(nc) += w_ff_torques.cwiseProduct(root.G_ff);
+
+    Eigen::VectorXd x;
+    if (proximal)
+        x = proximal_solve(A, b, 6);
+    else
+    {
+        proximal_iterations = 0;
+        x = A.colPivHouseholderQr().solve(b);
+    }
+    acc_root_used = Twist(Vector(x(3), x(4), x(5)), Vector(x(0), x(1), x(2)));
+    nu = x.tail(nc);
 }
 
 void ChainHdSolver_Vereshchagin::final_upwards_sweep(JntArray &q_dotdot, JntArray &constraint_torques)
@@ -410,7 +562,7 @@ void ChainHdSolver_Vereshchagin::final_upwards_sweep(JntArray &q_dotdot, JntArra
         Twist a_p;
         if (i == 1)
         {
-            a_p = acc_root;
+            a_p = acc_root_used;
         }
         else
         {

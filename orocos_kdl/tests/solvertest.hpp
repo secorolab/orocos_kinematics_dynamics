@@ -38,6 +38,8 @@ class SolverTest : public CppUnit::TestFixture
     CPPUNIT_TEST(VereshchaginFixedJointTest );
     CPPUNIT_TEST(VereshchaginDriverWeightingTest );
     CPPUNIT_TEST(VereshchaginDriverPassThroughTest );
+    CPPUNIT_TEST(VereshchaginProximalTest );
+    CPPUNIT_TEST(VereshchaginFloatingBaseTest );
     CPPUNIT_TEST(ExternalWrenchEstimatorTest );
     CPPUNIT_TEST(IkSingularValueTest );
     CPPUNIT_TEST(IkVelSolverWDLSTest );
@@ -63,6 +65,8 @@ public:
     void VereshchaginFixedJointTest();
     void VereshchaginDriverWeightingTest();
     void VereshchaginDriverPassThroughTest();
+    void VereshchaginProximalTest();
+    void VereshchaginFloatingBaseTest();
     void ExternalWrenchEstimatorTest();
     void IkSingularValueTest() ;
     void IkVelSolverWDLSTest();

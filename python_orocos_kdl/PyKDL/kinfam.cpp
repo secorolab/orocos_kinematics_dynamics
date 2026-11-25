@@ -559,4 +559,17 @@ void init_kinfam(pybind11::module &m)
         self.getContraintForceMagnitude(nu);
         return nu;
     }, py::arg("nu"));
+    chain_hd_solver_vereshchagin.def("setFloatingBase", &ChainHdSolver_Vereshchagin::setFloatingBase,
+                                     py::arg("inertia"), py::arg("twist"));
+    chain_hd_solver_vereshchagin.def("setFixedBase", &ChainHdSolver_Vereshchagin::setFixedBase);
+    chain_hd_solver_vereshchagin.def("setProximalSolver", &ChainHdSolver_Vereshchagin::setProximalSolver,
+                                     py::arg("enable"), py::arg("mu") = 1e-6, py::arg("max_iterations") = 10,
+                                     py::arg("tolerance") = 1e-12);
+    chain_hd_solver_vereshchagin.def("getProximalIterations", &ChainHdSolver_Vereshchagin::getProximalIterations);
+    chain_hd_solver_vereshchagin.def("getRootAcceleration", [](const ChainHdSolver_Vereshchagin &self)
+    {
+        Twist root_acceleration;
+        self.getRootAcceleration(root_acceleration);
+        return root_acceleration;
+    });
 }

@@ -1427,6 +1427,150 @@ void SolverTest::vereshchaginDriverResponse(const Chain &chain, unsigned int nc,
     dacc = acc1.back() - acc0.back();
 }
 
+void SolverTest::VereshchaginProximalTest()
+{
+    std::cout << "KDL Vereshchagin Proximal Solver Test" << std::endl;
+
+    // Proximal iterations replace the truncated SVD of M0 only when enabled; for well-posed
+    // constraints both give the same motion, for redundant ones whose setpoints disagree
+    // the proximal constraint forces stay bounded.
+    unsigned int nj = kukaLWR.getNrOfJoints();
+    JntArray q(nj), qd(nj), qdd_svd(nj), qdd_prox(nj), ff(nj), ct(nj);
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        q(i) = 0.3 + 0.1 * i;
+        qd(i) = 0.2 - 0.05 * i;
+    }
+    Wrenches f_ext(kukaLWR.getNrOfSegments());
+
+    Jacobian alpha(6);
+    for (unsigned int c = 0; c < 6; c++)
+    {
+        Twist unit = Twist::Zero();
+        if (c < 3)
+            unit.vel(c) = 1.0;
+        else
+            unit.rot(c - 3) = 1.0;
+        alpha.setColumn(c, unit);
+    }
+    JntArray beta(6);
+    for (unsigned int c = 0; c < 6; c++)
+        beta(c) = 0.4 - 0.15 * c;
+
+    ChainHdSolver_Vereshchagin svd(kukaLWR, Twist::Zero(), 6);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, svd.CartToJnt(q, qd, qdd_svd, alpha, beta, f_ext, ff, ct));
+    CPPUNIT_ASSERT_EQUAL(0u, svd.getProximalIterations());
+    ChainHdSolver_Vereshchagin prox(kukaLWR, Twist::Zero(), 6);
+    prox.setProximalSolver(true, 1e-6, 50, 1e-12);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, prox.CartToJnt(q, qd, qdd_prox, alpha, beta, f_ext, ff, ct));
+    CPPUNIT_ASSERT(prox.getProximalIterations() > 0);
+    for (unsigned int i = 0; i < nj; i++)
+        CPPUNIT_ASSERT(Equal(qdd_prox(i), qdd_svd(i), 1e-9));
+
+    // A duplicated direction with a different setpoint: no exact solution exists.
+    Jacobian alpha_r(7);
+    for (unsigned int c = 0; c < 6; c++)
+        alpha_r.setColumn(c, alpha.getColumn(c));
+    alpha_r.setColumn(6, alpha.getColumn(0));
+    JntArray beta_r(7);
+    for (unsigned int c = 0; c < 6; c++)
+        beta_r(c) = beta(c);
+    beta_r(6) = beta(0) + 0.5;
+    ChainHdSolver_Vereshchagin svd_r(kukaLWR, Twist::Zero(), 7);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, svd_r.CartToJnt(q, qd, qdd_svd, alpha_r, beta_r, f_ext, ff, ct));
+    ChainHdSolver_Vereshchagin prox_r(kukaLWR, Twist::Zero(), 7);
+    prox_r.setProximalSolver(true, 1e-6, 50, 1e-12);
+    CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, prox_r.CartToJnt(q, qd, qdd_prox, alpha_r, beta_r, f_ext, ff, ct));
+    Eigen::VectorXd nu_svd(7), nu_prox(7);
+    svd_r.getContraintForceMagnitude(nu_svd);
+    prox_r.getContraintForceMagnitude(nu_prox);
+    CPPUNIT_ASSERT(nu_prox.allFinite());
+    CPPUNIT_ASSERT(nu_prox.norm() < 10.0 * nu_svd.norm());
+    for (unsigned int i = 0; i < nj; i++)
+        CPPUNIT_ASSERT(Equal(qdd_prox(i), qdd_svd(i), 1e-9));
+}
+
+void SolverTest::VereshchaginFloatingBaseTest()
+{
+    std::cout << "KDL Vereshchagin Floating Base Test" << std::endl;
+
+    // With a floating base the root acceleration is solved, and the constraint wrench is
+    // realised through the joints, so nothing external pushes the base. Check that with
+    // RNEA on an equivalent chain whose root is fixed and whose base hangs from six
+    // virtual joints: the torques it needs on those joints must vanish.
+    const RigidBodyInertia base_inertia(40.0, Vector(0.05, -0.02, 0.1),
+                                        RotationalInertia(1.5, 1.2, 1.0, 0.05, -0.02, 0.03));
+    const Vector v_base(0.03, -0.02, 0.01), w_base(0.05, -0.04, 0.02);
+
+    unsigned int nj = kukaLWR.getNrOfJoints();
+    JntArray q(nj), qd(nj), qdd(nj), ff(nj), ct(nj);
+    for (unsigned int i = 0; i < nj; i++)
+    {
+        q(i) = 0.3 + 0.1 * i;
+        qd(i) = 0.2 - 0.05 * i;
+        ff(i) = 0.5 - 0.1 * i;
+    }
+    Wrenches f_ext(kukaLWR.getNrOfSegments());
+    Jacobian alpha(6);
+    for (unsigned int c = 0; c < 6; c++)
+    {
+        Twist unit = Twist::Zero();
+        if (c < 3)
+            unit.vel(c) = 1.0;
+        else
+            unit.rot(c - 3) = 1.0;
+        alpha.setColumn(c, unit);
+    }
+    JntArray beta(6);
+    for (unsigned int c = 0; c < 6; c++)
+        beta(c) = 0.4 - 0.15 * c;
+
+    for (int proximal = 0; proximal < 2; proximal++)
+    {
+        ChainHdSolver_Vereshchagin solver(kukaLWR, Twist::Zero(), 6);
+        solver.setFloatingBase(base_inertia, Twist(v_base, w_base));
+        solver.setProximalSolver(proximal == 1);
+        CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, solver.CartToJnt(q, qd, qdd, alpha, beta, f_ext, ff, ct));
+        Twist a0;
+        solver.getRootAcceleration(a0);
+        CPPUNIT_ASSERT(a0.vel.Norm() + a0.rot.Norm() > 1e-6);
+
+        Chain floating;
+        const Joint::JointType virtual_joints[6] = {Joint::TransX, Joint::TransY, Joint::TransZ,
+                                                     Joint::RotX, Joint::RotY, Joint::RotZ};
+        for (unsigned int k = 0; k < 6; k++)
+            floating.addSegment(Segment(Joint(virtual_joints[k]), Frame::Identity(),
+                                        k == 5 ? base_inertia : RigidBodyInertia::Zero()));
+        floating.addChain(kukaLWR);
+        JntArray qf(nj + 6), qdf(nj + 6), qddf(nj + 6), tau(nj + 6);
+        // Virtual joints at zero: their rates are the base twist. The base origin's classical
+        // acceleration is a0.vel + w x v; with all three rotations at zero, the Euler-rate
+        // products are the only difference between their accelerations and a0.rot.
+        const Vector a_lin = a0.vel + w_base * v_base;
+        const Vector euler_products = Vector(w_base(0), 0, 0) * Vector(0, w_base(1), 0)
+                                    + Vector(w_base(0), w_base(1), 0) * Vector(0, 0, w_base(2));
+        const Vector a_rot = a0.rot - euler_products;
+        for (unsigned int k = 0; k < 3; k++)
+        {
+            qdf(k) = v_base(k);
+            qdf(k + 3) = w_base(k);
+            qddf(k) = a_lin(k);
+            qddf(k + 3) = a_rot(k);
+        }
+        for (unsigned int i = 0; i < nj; i++)
+        {
+            qf(i + 6) = q(i);
+            qdf(i + 6) = qd(i);
+            qddf(i + 6) = qdd(i);
+        }
+        ChainIdSolver_RNE rnea(floating, Vector::Zero());
+        Wrenches f_ext_f(floating.getNrOfSegments());
+        CPPUNIT_ASSERT_EQUAL((int)SolverI::E_NOERROR, rnea.CartToJnt(qf, qdf, qddf, f_ext_f, tau));
+        for (unsigned int k = 0; k < 6; k++)
+            CPPUNIT_ASSERT(Equal(tau(k), 0.0, 1e-8));
+    }
+}
+
 void SolverTest::VereshchaginDriverPassThroughTest()
 {
     std::cout << "KDL Vereshchagin Driver Pass-Through Test" << std::endl;
